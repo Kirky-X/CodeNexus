@@ -6,14 +6,16 @@ use std::fmt;
 use serde::Serialize;
 use serde_json::Value;
 
+#[cfg(all(test, any(feature = "cli", feature = "mcp")))]
 use crate::kit::{AsyncKit, AsyncReady};
+use crate::sdk::Nexus;
 use crate::service::detect_changes::run_detect_changes;
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
 use crate::service::error::{kit_not_initialized, wrap_error};
 use crate::service::impact::run_impact;
 #[cfg(feature = "cli")]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 use crate::service::search::run_search;
 use crate::service::status::run_status;
 use crate::service::trace::run_trace;
@@ -262,7 +264,7 @@ fn cypher_name_lookup(symbol: &str) -> String {
 /// JSON value. `project` applies to project-scoped commands (dead_code,
 /// complexity, architecture).
 fn execute_intent(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &Nexus,
     candidate: &IntentCandidate,
     question: &str,
     project: &str,
@@ -272,49 +274,49 @@ fn execute_intent(
             let sym = candidate.symbol.as_deref().ok_or_else(|| {
                 CodeNexusError::InvalidInput("trace intent requires a symbol".to_string())
             })?;
-            serde_json::to_value(run_trace(kit, sym, "calls", 3, "", false, false)?)?
+            serde_json::to_value(run_trace(nexus, sym, "calls", 3, "", false, false)?)?
         }
         "impact" => {
             let sym = candidate.symbol.as_deref().ok_or_else(|| {
                 CodeNexusError::InvalidInput("impact intent requires a symbol".to_string())
             })?;
-            serde_json::to_value(run_impact(kit, sym, 3, "", 0, false)?)?
+            serde_json::to_value(run_impact(nexus, sym, 3, "", 0, false)?)?
         }
         "context" => {
             let sym = candidate.symbol.as_deref().ok_or_else(|| {
                 CodeNexusError::InvalidInput("context intent requires a symbol".to_string())
             })?;
-            serde_json::to_value(run_context(kit, sym, 1)?)?
+            serde_json::to_value(run_context(nexus, sym, 1)?)?
         }
         "search" => {
             let text = candidate
                 .symbol
                 .clone()
                 .unwrap_or_else(|| question.to_string());
-            serde_json::to_value(run_search(kit, &text, false, 20, "", project)?)?
+            serde_json::to_value(run_search(nexus, &text, false, 20, "", project)?)?
         }
         // dead_code/architecture 服务为 analysis 门控（api-review/diagram 等隐含 analysis）
         #[cfg(feature = "analysis")]
         "dead_code" => serde_json::to_value(run_dead_code(
-            kit,
+            nexus,
             &DeadCodeParams {
                 project: project.to_string(),
                 ..DeadCodeParams::default()
             },
         )?)?,
         #[cfg(feature = "analysis")]
-        "architecture" => serde_json::to_value(run_architecture(kit, project)?)?,
-        "status" => serde_json::to_value(run_status(kit)?)?,
-        "detect_changes" => serde_json::to_value(run_detect_changes(kit, ".", "unstaged")?)?,
+        "architecture" => serde_json::to_value(run_architecture(nexus, project)?)?,
+        "status" => serde_json::to_value(run_status(nexus)?)?,
+        "detect_changes" => serde_json::to_value(run_detect_changes(nexus, ".", "unstaged")?)?,
         "query" => {
             let sym = candidate.symbol.as_deref().ok_or_else(|| {
                 CodeNexusError::InvalidInput("query intent requires a symbol".to_string())
             })?;
-            serde_json::to_value(run_query(kit, &cypher_name_lookup(sym))?)?
+            serde_json::to_value(run_query(nexus, &cypher_name_lookup(sym))?)?
         }
         #[cfg(feature = "complexity")]
         "complexity" => {
-            let storage = kit.require::<crate::kit::StorageModule>()?;
+            let storage = nexus.storage()?;
             let project_id = resolve_project_id(&*storage, project)?;
             let analyzer = ComplexityAnalyzer::new(&*storage);
             let entries = analyzer
@@ -357,12 +359,7 @@ fn execute_intent(
 }
 
 /// Core logic — routes and (optionally) executes against an injected Kit.
-pub fn run_ask(
-    kit: &AsyncKit<AsyncReady>,
-    question: &str,
-    execute: bool,
-    project: &str,
-) -> AskOutput {
+pub fn run_ask(nexus: &Nexus, question: &str, execute: bool, project: &str) -> AskOutput {
     let candidates = route(question);
     let best = candidates.first().cloned();
     let mut suggestions: Vec<String> = Vec::new();
@@ -381,7 +378,7 @@ pub fn run_ask(
         .as_ref()
         .is_some_and(|c| execute && c.confidence >= 0.6);
     let (executed, result) = match (executable, best) {
-        (true, Some(candidate)) => match execute_intent(kit, &candidate, question, project) {
+        (true, Some(candidate)) => match execute_intent(nexus, &candidate, question, project) {
             Ok(value) => (true, Some(value)),
             // Degrade: keep exit 0, surface the equivalent CLI instead.
             Err(_err) => (true, None),
@@ -408,8 +405,8 @@ pub fn run_ask(
     cli = true
 )]
 async fn ask(question: String, execute: bool, project: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = run_ask(&kit, &question, execute, &project);
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    let output = run_ask(&nexus, &question, execute, &project);
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
@@ -420,7 +417,7 @@ async fn ask(question: String, execute: bool, project: String) -> Result<(), Api
 #[cfg(any(feature = "cli", feature = "mcp"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
+    use crate::kit::{build_kit, KitBootstrapConfig};
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -436,6 +433,10 @@ mod tests {
             .unwrap()
             .block_on(build_kit(&config))
             .expect("build_kit")
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> Nexus {
+        Nexus::from_kit(build_kit_for_db(db))
     }
 
     // symbol extraction
@@ -519,8 +520,8 @@ mod tests {
 
     // execution (kit-based)
 
-    fn seed_symbol(kit: &AsyncKit<AsyncReady>) {
-        let storage = kit.require::<StorageModule>().unwrap();
+    fn seed_symbol(nexus: &Nexus) {
+        let storage = nexus.storage().unwrap();
         storage
             .execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'seed_fn', qualifiedName: 'demo.seed_fn', filePath: '/src/s.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});")
             .unwrap();
@@ -535,9 +536,9 @@ mod tests {
     #[test]
     fn run_ask_executes_trace_intent() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        seed_symbol(&kit);
-        let out = run_ask(&kit, "谁调用了 `seed_fn`", true, "");
+        let nexus = nexus_for_db(&db);
+        seed_symbol(&nexus);
+        let out = run_ask(&nexus, "谁调用了 `seed_fn`", true, "");
         assert_eq!(out.intent.as_ref().unwrap().command, "trace");
         assert!(out.executed);
         let result = out.result.expect("trace result present");
@@ -547,9 +548,9 @@ mod tests {
     #[test]
     fn run_ask_execute_false_skips_execution() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        seed_symbol(&kit);
-        let out = run_ask(&kit, "谁调用了 `seed_fn`", false, "");
+        let nexus = nexus_for_db(&db);
+        seed_symbol(&nexus);
+        let out = run_ask(&nexus, "谁调用了 `seed_fn`", false, "");
         assert!(!out.executed);
         assert!(out.result.is_none());
         assert!(out.intent.is_some());
@@ -562,8 +563,8 @@ mod tests {
     #[test]
     fn run_ask_degrades_to_suggestions_on_unknown_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let out = run_ask(&kit, "改动 `missing_symbol` 的影响", true, "");
+        let nexus = nexus_for_db(&db);
+        let out = run_ask(&nexus, "改动 `missing_symbol` 的影响", true, "");
         assert!(out.executed);
         assert!(out.result.is_none(), "failed execution → no result");
         assert!(
@@ -583,8 +584,8 @@ mod tests {
     #[test]
     fn run_ask_trace_unknown_symbol_returns_empty_result() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let out = run_ask(&kit, "谁调用了 `missing_symbol`", true, "");
+        let nexus = nexus_for_db(&db);
+        let out = run_ask(&nexus, "谁调用了 `missing_symbol`", true, "");
         assert!(out.executed);
         let result = out.result.expect("trace result present");
         assert_eq!(result["symbol"], "missing_symbol");
@@ -598,8 +599,8 @@ mod tests {
     #[test]
     fn run_ask_without_match_lists_no_intent() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let out = run_ask(&kit, "今天天气怎么样", true, "");
+        let nexus = nexus_for_db(&db);
+        let out = run_ask(&nexus, "今天天气怎么样", true, "");
         assert!(out.intent.is_none());
         assert!(!out.executed);
     }
@@ -607,8 +608,8 @@ mod tests {
     #[test]
     fn run_ask_status_intent_executes_on_empty_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let out = run_ask(&kit, "当前的索引状态如何", true, "");
+        let nexus = nexus_for_db(&db);
+        let out = run_ask(&nexus, "当前的索引状态如何", true, "");
         assert_eq!(out.intent.as_ref().unwrap().command, "status");
         assert!(out.executed);
         assert!(out.result.is_some(), "status succeeds even on empty DB");

@@ -7,8 +7,6 @@ use serde::Serialize;
 
 #[cfg(feature = "analysis")]
 use crate::analysis::architecture::{ArchitectureAnalyzer, ArchitectureOverview};
-#[cfg(feature = "analysis")]
-use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
@@ -18,7 +16,7 @@ use crate::service::error::CodeNexusError;
 #[cfg(feature = "analysis")]
 use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
 use sdforge::forge;
@@ -40,10 +38,10 @@ pub struct ArchitectureOutput {
 /// `cross_service_deps`.
 #[cfg(feature = "analysis")]
 pub fn run_architecture(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     project: &str,
 ) -> Result<ArchitectureOutput, CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+    let storage = nexus.storage()?;
     let project_id = resolve_project_id(&*storage, project)?;
     let analyzer = ArchitectureAnalyzer::new(&*storage);
     let overview: ArchitectureOverview = analyzer.overview(&project_id)?;
@@ -62,9 +60,9 @@ pub fn run_architecture(
     cli = true
 )]
 async fn architecture(project: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let output =
-        run_architecture(&kit, &project).map_err(|e| to_api_error(e, "architecture_error"))?;
+        run_architecture(&nexus, &project).map_err(|e| to_api_error(e, "architecture_error"))?;
     let json = serde_json::to_string(&output)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "architecture_error"))?;
     println!("{json}");
@@ -80,8 +78,8 @@ async fn architecture(project: String) -> Result<(), ApiError> {
     description = "Show a high-level architecture overview of a project: module boundaries, dependency directions, entry points, hotspots. Params: project — project name or id (empty = all projects)."
 )]
 async fn architecture_mcp(project: String) -> Result<ArchitectureOutput, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    run_architecture(&kit, &project).map_err(|e| to_api_error(e, "architecture_error"))
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    run_architecture(&nexus, &project).map_err(|e| to_api_error(e, "architecture_error"))
 }
 
 #[cfg(all(test, feature = "cli", feature = "analysis"))]
@@ -95,6 +93,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_architecture_testdb");
         (dir, path)
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
@@ -116,8 +118,8 @@ mod tests {
     #[test]
     fn run_architecture_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output = run_architecture(&kit, "demo").expect("run should succeed");
         assert_eq!(output.project, "demo");
@@ -131,8 +133,8 @@ mod tests {
     #[test]
     fn run_architecture_returns_languages() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage
             .execute("CREATE (:File {id: 'f1', project: 'demo', name: 'main.rs', filePath: '/src/main.rs', language: 'rust', hash: '', lineCount: 0});")
@@ -145,8 +147,8 @@ mod tests {
     #[test]
     fn run_architecture_with_routes() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage
             .execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});")
@@ -187,8 +189,8 @@ mod tests {
     #[test]
     fn run_architecture_includes_module_boundaries() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a1', project: 'demo', name: 'a1', qualifiedName: 'demo.a1', filePath: '/src/a/a1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a1");
         storage.execute("CREATE (:Function {id: 'f_b1', project: 'demo', name: 'b1', qualifiedName: 'demo.b1', filePath: '/src/b/b1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b1");
@@ -218,8 +220,8 @@ mod tests {
     #[test]
     fn run_architecture_includes_dependency_directions() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a1', project: 'demo', name: 'a1', qualifiedName: 'demo.a1', filePath: '/src/a/a1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a1");
         storage.execute("CREATE (:Function {id: 'f_b1', project: 'demo', name: 'b1', qualifiedName: 'demo.b1', filePath: '/src/b/b1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b1");
@@ -240,8 +242,8 @@ mod tests {
     #[test]
     fn run_architecture_includes_layers() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         // Controller: function that HANDLES_ROUTE
         storage.execute("CREATE (:Function {id: 'f_ctrl', project: 'demo', name: 'list_users', qualifiedName: 'demo.list_users', filePath: '/src/api/handler.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create controller");
@@ -265,8 +267,8 @@ mod tests {
     #[test]
     fn run_architecture_serializes_enhanced_fields() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output = run_architecture(&kit, "demo").expect("run should succeed");
         let json = serde_json::to_string(&output).unwrap();
@@ -288,8 +290,8 @@ mod tests {
     #[test]
     fn run_architecture_detects_circular_dependency() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a1', project: 'demo', name: 'a1', qualifiedName: 'demo.a1', filePath: '/src/a/a1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a1");
         storage.execute("CREATE (:Function {id: 'f_b1', project: 'demo', name: 'b1', qualifiedName: 'demo.b1', filePath: '/src/b/b1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b1");
@@ -309,8 +311,8 @@ mod tests {
     #[test]
     fn run_architecture_module_boundary_cohesion() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         // Module A with internal calls only → cohesion = 1.0
         storage.execute("CREATE (:Function {id: 'f_a1', project: 'demo', name: 'a1', qualifiedName: 'demo.a1', filePath: '/src/a/a1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a1");
@@ -337,8 +339,8 @@ mod tests {
     #[test]
     fn run_architecture_includes_cross_service_deps() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create caller");
@@ -355,8 +357,8 @@ mod tests {
     #[test]
     fn run_architecture_with_packages() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:File {id: 'f1', project: 'demo', name: 'main.rs', filePath: '/src/main.rs', language: 'rust', hash: '', lineCount: 100});").expect("create file");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/main.rs', startLine: 1, endLine: 50, signature: '', returnType: '', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create function");
@@ -368,8 +370,8 @@ mod tests {
     #[test]
     fn run_architecture_with_entry_points() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_main', project: 'demo', name: 'main', qualifiedName: 'demo.main', filePath: '/src/main.rs', startLine: 1, endLine: 50, signature: 'fn main()', returnType: '', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create main");
         storage.execute("CREATE (:CodeRelation {id: 'e_ep', source: 'f_main', target: 'f_main', type: 'ENTRY_POINT', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create entry point edge");
@@ -381,8 +383,8 @@ mod tests {
     #[test]
     fn run_architecture_unknown_project_returns_empty_overview() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:File {id: 'f1', project: 'other', name: 'main.rs', filePath: '/src/main.rs', language: 'rust', hash: '', lineCount: 0});").expect("create file in other project");
 
         let err = run_architecture(&kit, "demo").expect_err("unknown project should error");

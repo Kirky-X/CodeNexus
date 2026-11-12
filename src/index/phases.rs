@@ -883,7 +883,7 @@ struct EdgeIntegrityStats {
 ///    `variable_declarator` context while the extracted function node is
 ///    plain `validateSnapshot`) names a sub-entity of a real node. The edge
 ///    is re-attributed to that parent (`#`-stripped qualified name).
-///    Sources without `#` are unresolvable symbol references (`impl KitExt
+///    Sources without `#` are unresolvable symbol references (`impl ExternalTrait
 ///    for AsyncKit` with external AsyncKit, `impl ErasedPhase for P` with
 ///    generic param `P`) — re-pointing them at the enclosing File node would
 ///    fabricate semantics, so they fall through to the drop pass.
@@ -2183,14 +2183,17 @@ mod tests {
 
     #[test]
     fn integrity_drops_implements_from_unresolvable_source() {
-        // `impl KitExt for AsyncKit` with external AsyncKit: no node exists,
+        // `impl ExternalTrait for AsyncKit` with external AsyncKit: no node exists,
         // no `#` in the source (not a sub-entity attribution), parent is the
         // File node — re-pointing there would fabricate semantics. Drop.
         let mut graph = Graph::new();
-        graph.add_node(make_def_node("proj.src.kit.bootstrap.rs.KitExt", "proj"));
+        graph.add_node(make_def_node(
+            "proj.src.kit.bootstrap.rs.ExternalTrait",
+            "proj",
+        ));
         graph.add_edge(Edge::new(
             "proj.src.kit.bootstrap.rs.AsyncKit",
-            "proj.src.kit.bootstrap.rs.KitExt",
+            "proj.src.kit.bootstrap.rs.ExternalTrait",
             EdgeType::Implements,
             "proj",
         ));
@@ -2443,7 +2446,7 @@ mod tests {
         graph.add_node(make_def_node("proj.src.kit.bootstrap.rs", "proj")); // File node
         graph.add_edge(Edge::new(
             "proj.src.kit.bootstrap.rs.AsyncKit",
-            "proj.src.kit.bootstrap.rs.KitExt",
+            "proj.src.kit.bootstrap.rs.ExternalTrait",
             EdgeType::Implements,
             "proj",
         ));

@@ -86,6 +86,10 @@ pub mod parse;
 pub mod query;
 #[doc(hidden)]
 pub mod resolve;
+/// `Nexus` SDK facade over the assembled capability kit (internal shape for
+/// now — public commitment is deferred until `trait-kit` 0.5.0 final).
+#[doc(hidden)]
+pub mod sdk;
 pub mod service;
 #[doc(hidden)]
 pub mod storage;

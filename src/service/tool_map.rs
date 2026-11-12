@@ -7,8 +7,6 @@ use serde::Serialize;
 
 #[cfg(feature = "api-review")]
 use crate::analysis::api_review::{ApiReviewer, ToolEntry};
-#[cfg(feature = "api-review")]
-use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "cli", feature = "api-review"))]
@@ -18,7 +16,7 @@ use crate::service::error::CodeNexusError;
 #[cfg(feature = "api-review")]
 use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "cli", feature = "api-review"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use sdforge::forge;
@@ -35,8 +33,8 @@ pub struct ToolMapOutput {
 
 /// Core logic — resolves storage, runs tool_map, prints JSON.
 #[cfg(feature = "api-review")]
-fn tool_map_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+fn tool_map_core(nexus: &crate::sdk::Nexus, project: &str) -> Result<(), CodeNexusError> {
+    let storage = nexus.storage()?;
     let project_id = resolve_project_id(&*storage, project)?;
     let reviewer = ApiReviewer::new(&*storage);
     let tool_map: Vec<ToolEntry> = reviewer.tool_map(&project_id)?;
@@ -58,8 +56,8 @@ fn tool_map_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CodeNe
     cli = true
 )]
 async fn tool_map(project: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    tool_map_core(&kit, &project).map_err(|e| to_api_error(e, "tool_map_error"))?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    tool_map_core(&nexus, &project).map_err(|e| to_api_error(e, "tool_map_error"))?;
     Ok(())
 }
 
@@ -74,6 +72,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_tool_map_testdb");
         (dir, path)
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
@@ -95,8 +97,8 @@ mod tests {
     #[test]
     fn core_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let result = tool_map_core(&kit, "demo");
         assert!(result.is_ok(), "core should succeed: {:?}", result.err());
@@ -105,8 +107,8 @@ mod tests {
     #[test]
     fn core_with_tool() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Tool {id: 't1', project: 'demo', name: 'query', qualifiedName: 'query', filePath: '', toolType: 'mcp', parentQn: ''});").expect("create tool");
         storage.execute("CREATE (:Handler {id: 'h1', project: 'demo', name: 'query_handler', qualifiedName: 'query_handler', filePath: '', startLine: 0, endLine: 0, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create handler");

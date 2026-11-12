@@ -8,8 +8,8 @@ use serde_json::{json, Value};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use std::str::FromStr;
 
-#[cfg(any(feature = "cli", feature = "mcp", test))]
-use crate::kit::{AsyncKit, AsyncReady, QueryModule, StorageModule};
+#[cfg(test)]
+use crate::kit::{AsyncKit, AsyncReady};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::query::structured::{SearchEngine, SearchMode, SearchParams};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
@@ -21,7 +21,7 @@ use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::project::resolve_project_id;
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::forge;
@@ -57,7 +57,7 @@ fn search_result_to_json(r: &SearchResult) -> Value {
 /// (structured or BM25 full-text based on `fulltext` flag).
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 pub fn run_search(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     text: &str,
     fulltext: bool,
     limit: u32,
@@ -70,11 +70,11 @@ pub fn run_search(
         // silently returning every project's rows even though the CLI help /
         // MCP tool description promise "project — project name or id
         // (empty = all projects)".
-        let q = kit.require::<QueryModule>()?;
+        let q = nexus.query()?;
         let project_id = if project.is_empty() {
             None
         } else {
-            let storage = kit.require::<StorageModule>()?;
+            let storage = nexus.storage()?;
             Some(resolve_project_id(&*storage, project)?)
         };
         let results = if fulltext {
@@ -91,7 +91,7 @@ pub fn run_search(
         // Non-empty mode: parse strictly, reject unknown values.
         let search_mode = SearchMode::from_str(mode)
             .map_err(|e| CodeNexusError::InvalidInput(format!("invalid search mode: {e}")))?;
-        let storage = kit.require::<StorageModule>()?;
+        let storage = nexus.storage()?;
         let project_id = if project.is_empty() {
             project.to_string()
         } else {
@@ -129,8 +129,8 @@ async fn search(
     mode: String,
     project: String,
 ) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let result = run_search(&kit, &text, fulltext, limit, &mode, &project)
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    let result = run_search(&nexus, &text, fulltext, limit, &mode, &project)
         .map_err(|e| to_api_error(e, "search_error"))?;
     let json = serde_json::to_string(&result)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "search_error"))?;
@@ -153,8 +153,8 @@ async fn search_mcp(
     mode: String,
     project: String,
 ) -> Result<SearchOutput, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    run_search(&kit, &text, fulltext, limit, &mode, &project)
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    run_search(&nexus, &text, fulltext, limit, &mode, &project)
         .map_err(|e| to_api_error(e, "search_error"))
 }
 
@@ -170,6 +170,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_search_testdb");
         (dir, path)
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
@@ -191,7 +195,7 @@ mod tests {
     #[test]
     fn run_search_returns_empty_on_fresh_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let output = run_search(&kit, "foo", false, 10, "", "").expect("run should succeed");
         assert_eq!(output.count, 0);
         assert!(output.results.is_empty());
@@ -200,8 +204,8 @@ mod tests {
     #[test]
     fn run_search_finds_symbol_by_name() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
         let output = run_search(&kit, "do_thing", false, 10, "", "").expect("run should succeed");
         let _ = output;
@@ -210,7 +214,7 @@ mod tests {
     #[test]
     fn run_search_empty_text_returns_error() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err = run_search(&kit, "   ", false, 10, "", "").expect_err("empty text should error");
         assert!(matches!(err, CodeNexusError::Query(_)));
     }
@@ -218,7 +222,7 @@ mod tests {
     #[test]
     fn run_search_fulltext_empty_text_returns_error() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err = run_search(&kit, "", true, 10, "", "").expect_err("empty fulltext should error");
         assert!(matches!(err, CodeNexusError::Query(_)));
     }
@@ -291,8 +295,8 @@ mod tests {
     #[test]
     fn run_search_with_exact_mode_finds_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
         let output = run_search(&kit, "do_thing", false, 10, "exact", "demo")
@@ -330,7 +334,7 @@ mod tests {
     fn run_search_empty_mode_filters_by_project_name() {
         let (_dir, db) = fresh_db_path();
         seed_two_projects(&db);
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
 
         // Empty project = all projects (both rows visible).
         let all = run_search(&kit, "project_alpha_fn", false, 50, "", "")
@@ -358,7 +362,7 @@ mod tests {
     fn run_search_empty_mode_filters_by_project_id() {
         let (_dir, db) = fresh_db_path();
         seed_two_projects(&db);
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
 
         let by_id = run_search(&kit, "project_alpha_fn", false, 50, "", "alpha")
             .expect("id-filtered search should succeed");
@@ -369,7 +373,7 @@ mod tests {
     fn run_search_empty_mode_fulltext_filters_by_project() {
         let (_dir, db) = fresh_db_path();
         seed_two_projects(&db);
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
 
         let foreign = run_search(&kit, "project_alpha_fn", true, 50, "", "beta")
             .expect("filtered fulltext search should succeed");
@@ -387,7 +391,7 @@ mod tests {
     fn run_search_empty_mode_unknown_project_errors() {
         let (_dir, db) = fresh_db_path();
         seed_two_projects(&db);
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
 
         let err = run_search(&kit, "project_alpha_fn", false, 50, "", "gamma")
             .expect_err("unknown project must error");
@@ -400,8 +404,8 @@ mod tests {
     #[test]
     fn run_search_with_regex_mode_finds_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
         let output = run_search(&kit, "do_.*", false, 10, "regex", "demo")
@@ -412,8 +416,8 @@ mod tests {
     #[test]
     fn run_search_with_fuzzy_mode_finds_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
         let output = run_search(&kit, "do_thng", false, 10, "fuzzy", "demo")
@@ -425,7 +429,7 @@ mod tests {
     #[test]
     fn run_search_with_invalid_mode_returns_error() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         // Non-empty but invalid mode must error (never silently fall back).
         let err = run_search(&kit, "foo", false, 10, "invalid_mode", "")
             .expect_err("invalid mode should error");
@@ -443,7 +447,7 @@ mod tests {
     #[test]
     fn run_search_with_empty_mode_uses_legacy_path() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let output =
             run_search(&kit, "foo", false, 10, "", "").expect("empty mode should use legacy path");
         assert_eq!(output.count, 0);
@@ -454,8 +458,8 @@ mod tests {
     #[test]
     fn run_search_with_graph_enhanced_mode_finds_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
         let output = run_search(&kit, "do_thing", false, 10, "graph", "demo")
@@ -466,8 +470,8 @@ mod tests {
     #[test]
     fn run_search_with_graph_enhanced_alias_finds_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
         let output = run_search(&kit, "do_thing", false, 10, "graph_enhanced", "demo")
@@ -481,8 +485,8 @@ mod tests {
     #[test]
     fn run_search_with_multi_signal_mode_finds_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
         let output = run_search(&kit, "do_thing", false, 10, "multi", "demo")
@@ -493,8 +497,8 @@ mod tests {
     #[test]
     fn run_search_with_multi_signal_alias_finds_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
         let output = run_search(&kit, "do_thing", false, 10, "multi_signal", "demo")
@@ -508,8 +512,8 @@ mod tests {
     #[test]
     fn run_search_with_graph_enhanced_on_empty_db_returns_empty() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output = run_search(&kit, "foo", false, 10, "graph", "demo")
             .expect("graph mode on empty DB should succeed");
@@ -519,8 +523,8 @@ mod tests {
     #[test]
     fn run_search_with_multi_signal_on_empty_db_returns_empty() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output = run_search(&kit, "foo", false, 10, "multi", "demo")
             .expect("multi mode on empty DB should succeed");
@@ -532,8 +536,8 @@ mod tests {
     #[test]
     fn run_search_fulltext_on_non_empty_db_succeeds() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'fetch_data', qualifiedName: 'demo.fetch_data', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
         let output = run_search(&kit, "fetch_data", true, 10, "", "")
             .expect("fulltext search should succeed");
@@ -543,8 +547,8 @@ mod tests {
     #[test]
     fn run_search_with_exact_mode_on_empty_db_returns_empty() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output = run_search(&kit, "foo", false, 10, "exact", "demo")
             .expect("exact mode on empty DB should succeed");
@@ -554,8 +558,8 @@ mod tests {
     #[test]
     fn run_search_with_regex_mode_on_empty_db_returns_empty() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output = run_search(&kit, "foo.*", false, 10, "regex", "demo")
             .expect("regex mode on empty DB should succeed");
@@ -565,8 +569,8 @@ mod tests {
     #[test]
     fn run_search_with_fuzzy_mode_on_empty_db_returns_empty() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output = run_search(&kit, "foo", false, 10, "fuzzy", "demo")
             .expect("fuzzy mode on empty DB should succeed");

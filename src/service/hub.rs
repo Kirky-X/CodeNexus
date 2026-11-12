@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::kit::{AsyncKit, AsyncReady};
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
 use crate::service::error::{to_api_error, wrap_error};
@@ -14,7 +13,7 @@ use crate::service::export::run_export;
 #[cfg(feature = "cli")]
 use crate::service::import::run_import;
 #[cfg(feature = "cli")]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -113,12 +112,12 @@ impl HubClient {
     /// Pushes the exported artifact for `project` to the registry.
     pub fn push(
         &self,
-        kit: &AsyncKit<AsyncReady>,
+        nexus: &crate::sdk::Nexus,
         project: &str,
     ) -> Result<HubOutcome, CodeNexusError> {
         let temp = tempfile::TempDir::new().map_err(CodeNexusError::Io)?;
         let artifact_path = temp.path().join("artifact.cnxp");
-        run_export(kit, artifact_path.to_str().unwrap_or_default(), project)?;
+        run_export(nexus, artifact_path.to_str().unwrap_or_default(), project)?;
         let bytes = std::fs::read(&artifact_path).map_err(CodeNexusError::Io)?;
 
         let mut request = self
@@ -144,7 +143,7 @@ impl HubClient {
     /// Pulls the latest artifact for `name` into the local DB.
     pub fn pull(
         &self,
-        kit: &AsyncKit<AsyncReady>,
+        nexus: &crate::sdk::Nexus,
         name: &str,
     ) -> Result<HubOutcome, CodeNexusError> {
         let response = self
@@ -160,7 +159,7 @@ impl HubClient {
         std::fs::write(&artifact_path, &bytes).map_err(CodeNexusError::Io)?;
         // run_import validates the .cnxp container (BLAKE3 + size caps).
         let import_result = run_import(
-            kit,
+            nexus,
             artifact_path.to_str().unwrap_or_default(),
             false,
             "",
@@ -222,7 +221,7 @@ pub struct HubOutput {
 /// `push` needs `project` (the artifact's source and registry grouping),
 /// `pull` needs `name`; `list` accepts an empty `project` (all projects).
 pub fn run_hub(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     action: &str,
     url: &str,
     name: &str,
@@ -254,8 +253,8 @@ pub fn run_hub(
     let token_value = HubClient::resolve_token(token);
     let client = HubClient::new(url, token_value)?;
     let outcome = match action.trim() {
-        "push" => client.push(kit, project)?,
-        "pull" => client.pull(kit, name)?,
+        "push" => client.push(nexus, project)?,
+        "pull" => client.pull(nexus, name)?,
         _ => client.list(project)?,
     };
     Ok(HubOutput {
@@ -289,8 +288,8 @@ async fn hub(
     // Run the whole blocking operation on the blocking pool, which is not in
     // an async context.
     let output = tokio::task::spawn_blocking(move || {
-        let kit = kit().ok_or_else(CodeNexusError::kit_not_initialized)?;
-        run_hub(&kit, &action, &url, &name, &project, &token)
+        let nexus = nexus().ok_or_else(CodeNexusError::kit_not_initialized)?;
+        run_hub(&nexus, &action, &url, &name, &project, &token)
     })
     .await
     .map_err(|e| {
@@ -488,6 +487,7 @@ mod tests {
             .unwrap()
             .block_on(crate::kit::build_kit(&config))
             .unwrap();
+        let kit = crate::sdk::Nexus::from_kit(kit);
         let err = run_hub(&kit, "teleport", "https://hub.example.com", "", "", "")
             .expect_err("unknown action");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
@@ -506,6 +506,7 @@ mod tests {
             .unwrap()
             .block_on(crate::kit::build_kit(&config))
             .unwrap();
+        let kit = crate::sdk::Nexus::from_kit(kit);
 
         let err = run_hub(&kit, "push", "https://hub.example.com", "", "", "")
             .expect_err("push without --project");
@@ -524,7 +525,7 @@ mod tests {
     /// request headers.
     #[test]
     fn run_hub_push_pull_list_round_trip() {
-        use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
+        use crate::kit::{build_kit, KitBootstrapConfig};
 
         let (base_url, registry, shutdown, server) = spawn_mock_registry();
 
@@ -534,7 +535,8 @@ mod tests {
             .unwrap()
             .block_on(build_kit(&src_config))
             .unwrap();
-        let storage = src_kit.require::<StorageModule>().expect("storage");
+        let src_kit = crate::sdk::Nexus::from_kit(src_kit);
+        let storage = src_kit.storage().expect("storage");
         storage
             .execute("CREATE (:Project {id: 'proj_demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});")
             .expect("create project");
@@ -577,6 +579,7 @@ mod tests {
             .unwrap()
             .block_on(build_kit(&dst_config))
             .unwrap();
+        let dst_kit = crate::sdk::Nexus::from_kit(dst_kit);
         let pulled =
             run_hub(&dst_kit, "pull", &base_url, "demo", "", "").expect("pull should succeed");
         assert_eq!(pulled.action, "pull");

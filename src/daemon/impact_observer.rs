@@ -62,8 +62,12 @@ impl ImpactNotifyObserver {
         // Writable open (not read-only): the indexer's connection is already
         // closed when this callback fires, and a fresh open replays any WAL
         // the index run left behind — read-only opens cannot replay WAL and
-        // would see stale data.
-        let repo = match Repository::open(&self.db_path) {
+        // would see stale data. Unified open path: transient open-time locks
+        // are absorbed by the backoff before the fail-soft branch runs.
+        let repo = match crate::storage::open::open_fresh(
+            &self.db_path,
+            crate::storage::open::OpenMode::ReadWrite,
+        ) {
             Ok(repo) => repo,
             Err(err) => {
                 warn!(

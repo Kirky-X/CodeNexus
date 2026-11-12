@@ -62,12 +62,16 @@ pub fn load_graph_for_symbol(
     // Open read-only when the caller is a query-only command so concurrent
     // readers don't contend on the write lock (mirrors StorageModule /
     // QueryModule read_only propagation). Read-only skips schema init — the
-    // target DB is already indexed.
-    let repo = if read_only {
-        Repository::open_read_only(db_path)
-    } else {
-        Repository::open(db_path)
-    }?;
+    // target DB is already indexed. Unified open path (`storage::open`):
+    // fresh snapshot semantics + lock backoff in both modes.
+    let repo = crate::storage::open::open_fresh(
+        db_path,
+        if read_only {
+            crate::storage::open::OpenMode::ReadOnly
+        } else {
+            crate::storage::open::OpenMode::ReadWrite
+        },
+    )?;
     // Phase 1: find start node ids matching the symbol.
     let start_ids = find_symbol_node_ids(&repo, symbol)?;
     if start_ids.is_empty() {

@@ -8,8 +8,8 @@ use serde_json::Value;
 
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::diagnostics::{Diagnostic, Severity};
-#[cfg(any(feature = "cli", feature = "mcp", test))]
-use crate::kit::{AsyncKit, AsyncReady, TraceModule};
+#[cfg(test)]
+use crate::kit::{AsyncKit, AsyncReady};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::model::EdgeType;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
@@ -17,7 +17,7 @@ use crate::service::error::CodeNexusError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::trace::find_start_node_id;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
@@ -162,14 +162,14 @@ fn build_impact_config(edge_types: &str, max_depth: u32, include_tests: bool) ->
 /// graph-loading path (backward compatible).
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 pub fn run_impact(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     symbol: &str,
     depth: u32,
     edge_types: &str,
     max_depth: u32,
     include_tests: bool,
 ) -> Result<ImpactOutput, CodeNexusError> {
-    let trace_engine = kit.require::<TraceModule>()?;
+    let trace_engine = nexus.trace()?;
     let enhanced = !edge_types.trim().is_empty() || max_depth > 0 || include_tests;
 
     if enhanced {
@@ -221,9 +221,16 @@ async fn impact(
     max_depth: u32,
     include_tests: bool,
 ) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let result = run_impact(&kit, &symbol, depth, &edge_types, max_depth, include_tests)
-        .map_err(|e| to_api_error(e, "impact_error"))?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    let result = run_impact(
+        &nexus,
+        &symbol,
+        depth,
+        &edge_types,
+        max_depth,
+        include_tests,
+    )
+    .map_err(|e| to_api_error(e, "impact_error"))?;
     let json = serde_json::to_string(&result)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "impact_error"))?;
     println!("{json}");
@@ -245,9 +252,16 @@ async fn impact_mcp(
     max_depth: u32,
     include_tests: bool,
 ) -> Result<ImpactOutput, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    run_impact(&kit, &symbol, depth, &edge_types, max_depth, include_tests)
-        .map_err(|e| to_api_error(e, "impact_error"))
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    run_impact(
+        &nexus,
+        &symbol,
+        depth,
+        &edge_types,
+        max_depth,
+        include_tests,
+    )
+    .map_err(|e| to_api_error(e, "impact_error"))
 }
 
 #[cfg(test)]
@@ -263,6 +277,10 @@ mod tests {
         (dir, path)
     }
 
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
+    }
+
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(db.to_path_buf());
         tokio::runtime::Runtime::new()
@@ -276,7 +294,7 @@ mod tests {
     #[test]
     fn run_impact_returns_invalid_input_on_empty_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err = run_impact(&kit, "demo.foo", 3, "", 0, false)
             .expect_err("unknown symbol on empty DB should error");
         assert!(
@@ -333,8 +351,8 @@ mod tests {
     #[test]
     fn run_impact_returns_non_empty_graph_for_known_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'root', qualifiedName: 'demo.root', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create root");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'leaf', qualifiedName: 'demo.leaf', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create leaf");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: 'direct call', startLine: 2, project: 'demo'});").expect("create edge");
@@ -351,8 +369,8 @@ mod tests {
     #[test]
     fn run_impact_at_depth_zero_returns_only_start_node() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_solo', project: 'demo', name: 'solo', qualifiedName: 'demo.solo', filePath: '/src/s.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create solo");
         storage.execute("CREATE (:Function {id: 'f_other', project: 'demo', name: 'other', qualifiedName: 'demo.other', filePath: '/src/o.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create other");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_solo', target: 'f_other', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
@@ -458,8 +476,8 @@ mod tests {
     #[test]
     fn run_impact_enhanced_returns_risk_assessment() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         // Create a caller chain: caller -> target
         storage.execute("CREATE (:Function {id: 'f_target', project: 'demo', name: 'target', qualifiedName: 'demo.target', filePath: '/src/t.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create target");
         storage.execute("CREATE (:Function {id: 'f_caller', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/c.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
@@ -485,8 +503,8 @@ mod tests {
     #[test]
     fn run_impact_enhanced_with_max_depth_limits_traversal() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         // Create chain: a -> b -> c -> target
         storage.execute("CREATE (:Function {id: 'f_target', project: 'demo', name: 'target', qualifiedName: 'demo.target', filePath: '/src/t.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create target");
         storage.execute("CREATE (:Function {id: 'f_c', project: 'demo', name: 'c', qualifiedName: 'demo.c', filePath: '/src/c.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create c");
@@ -510,8 +528,8 @@ mod tests {
     #[test]
     fn run_impact_enhanced_with_custom_edge_types() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         // target is used by struct via USES_TYPE
         storage.execute("CREATE (:Struct {id: 's_target', project: 'demo', name: 'Target', qualifiedName: 'demo.Target', filePath: '/src/t.rs', startLine: 1, endLine: 5, isExported: false, docstring: '', content: '', parentQn: ''});").expect("create target struct");
         storage.execute("CREATE (:Function {id: 'f_user', project: 'demo', name: 'user', qualifiedName: 'demo.user', filePath: '/src/u.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create user");
@@ -535,7 +553,7 @@ mod tests {
     #[test]
     fn run_impact_enhanced_returns_invalid_input_on_empty_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err = run_impact(&kit, "demo.missing", 3, "CALLS", 5, false)
             .expect_err("enhanced impact on missing symbol should error");
         assert!(
@@ -584,8 +602,8 @@ mod tests {
     #[test]
     fn run_impact_legacy_mode_no_risk_assessment() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'root', qualifiedName: 'demo.root', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create root");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'leaf', qualifiedName: 'demo.leaf', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create leaf");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
@@ -633,8 +651,8 @@ mod tests {
     #[test]
     fn run_impact_with_include_tests_succeeds() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_target', project: 'demo', name: 'target', qualifiedName: 'demo.target', filePath: '/src/t.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create target");
         storage.execute("CREATE (:Function {id: 'f_caller', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/c.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_caller', target: 'f_target', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
@@ -651,8 +669,8 @@ mod tests {
     #[test]
     fn run_impact_with_max_depth_only_uses_enhanced_mode() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
 
         // max_depth > 0 triggers enhanced mode even without edge_types
@@ -667,8 +685,8 @@ mod tests {
     #[test]
     fn run_impact_enhanced_returns_invalid_input_for_missing_start_node() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         // Create a node but query for a symbol that doesn't match
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_a', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create self-edge");

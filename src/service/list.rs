@@ -5,14 +5,14 @@
 
 use serde::Serialize;
 
-#[cfg(any(feature = "cli", test))]
-use crate::kit::{AsyncKit, AsyncReady, StorageModule};
+#[cfg(test)]
+use crate::kit::{AsyncKit, AsyncReady};
 #[cfg(any(feature = "cli", test))]
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(feature = "cli")]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 use crate::storage::{is_table_missing_error, ProjectRecord};
 
 #[cfg(feature = "cli")]
@@ -54,8 +54,8 @@ impl From<ProjectRecord> for ProjectOutput {
 /// layer (not storage) so [`QualityChecker::check_project_isolation`] keeps
 /// strict semantics for violation detection.
 #[cfg(any(feature = "cli", test))]
-pub fn run_list(kit: &AsyncKit<AsyncReady>) -> Result<Vec<ProjectOutput>, CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+pub fn run_list(nexus: &crate::sdk::Nexus) -> Result<Vec<ProjectOutput>, CodeNexusError> {
+    let storage = nexus.storage()?;
     let projects = match storage.list_projects() {
         Ok(projects) => projects,
         Err(err) if is_table_missing_error(&err) => return Ok(Vec::new()),
@@ -73,8 +73,8 @@ pub fn run_list(kit: &AsyncKit<AsyncReady>) -> Result<Vec<ProjectOutput>, CodeNe
     cli = true
 )]
 async fn list() -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = run_list(&kit).map_err(|e| to_api_error(e, "list_error"))?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    let output = run_list(&nexus).map_err(|e| to_api_error(e, "list_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
@@ -94,6 +94,10 @@ mod tests {
         (dir, path)
     }
 
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
+    }
+
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(db.to_path_buf());
         tokio::runtime::Runtime::new()
@@ -105,7 +109,7 @@ mod tests {
     #[test]
     fn run_list_returns_empty_on_fresh_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let output = run_list(&kit).expect("run should succeed");
         assert!(output.is_empty(), "fresh DB has no projects");
     }
@@ -116,8 +120,8 @@ mod tests {
         // The service layer converts "table missing" errors into empty list
         // (explicit empty > silent error) so CLI exits 0 with `[]`.
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         storage
             .execute("DROP TABLE Project;")
             .expect("drop project table");
@@ -128,8 +132,8 @@ mod tests {
     #[test]
     fn run_list_returns_projects_after_insert() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         storage
             .execute("CREATE (:Project {id: 'p1', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 10, indexedAt: 1000, lastCommit: 'abc123'});")
             .expect("create project");

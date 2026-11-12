@@ -7,16 +7,14 @@
 use std::path::Path;
 
 #[cfg(feature = "daemon")]
-use crate::kit::{AsyncKit, AsyncReady, DaemonModule};
-#[cfg(all(feature = "cli", feature = "daemon"))]
-use crate::service::error::to_api_error;
-#[cfg(feature = "daemon")]
 use crate::service::error::CodeNexusError;
 
 #[cfg(all(feature = "cli", feature = "daemon"))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "cli", feature = "daemon"))]
-use crate::service::runtime::kit;
+use crate::service::error::to_api_error;
+#[cfg(all(feature = "cli", feature = "daemon"))]
+use crate::service::runtime::nexus;
 
 #[cfg(all(feature = "cli", feature = "daemon"))]
 use sdforge::forge;
@@ -34,7 +32,7 @@ use sdforge::prelude::ApiError;
 /// completion. The bootstrap default stays `false` (opt-in).
 #[cfg(feature = "daemon")]
 fn daemon_core(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     path: &str,
     name: &str,
     notify_impact: bool,
@@ -46,7 +44,7 @@ fn daemon_core(
             watch_path.display()
         )));
     }
-    let daemon = kit.require::<DaemonModule>()?;
+    let daemon = nexus.daemon()?;
     daemon.update_impact_notify(notify_impact);
     daemon.start(watch_path, name)?;
     Ok(())
@@ -61,8 +59,8 @@ fn daemon_core(
     cli = true
 )]
 async fn daemon(path: String, name: String, notify_impact: bool) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    daemon_core(&kit, &path, &name, notify_impact).map_err(|e| to_api_error(e, "daemon_error"))
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    daemon_core(&nexus, &path, &name, notify_impact).map_err(|e| to_api_error(e, "daemon_error"))
 }
 
 #[cfg(all(test, feature = "daemon"))]
@@ -105,12 +103,20 @@ mod tests {
             .expect("build_kit")
     }
 
+    fn nexus_for_db(db: &str) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
+    }
+
+    fn nexus_for_db_with_debounce(db: &str, debounce_ms: u64) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db_with_debounce(db, debounce_ms))
+    }
+
     // path validation
 
     #[test]
     fn daemon_core_returns_error_for_nonexistent_path() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
+        let kit = nexus_for_db(db.to_str().unwrap());
         let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo", false)
             .expect_err("nonexistent path should error");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
@@ -120,7 +126,7 @@ mod tests {
     #[test]
     fn daemon_core_error_message_contains_path() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
+        let kit = nexus_for_db(db.to_str().unwrap());
         let err = daemon_core(&kit, "/no/such/dir", "demo", false).expect_err("should error");
         let msg = err.to_string();
         assert!(
@@ -137,7 +143,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "main.rs", "fn main() {}\n");
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
+        let kit = nexus_for_db_with_debounce(db.to_str().unwrap(), 200);
         let watch_path = tmp.path().to_str().unwrap().to_string();
         let handle = thread::spawn(move || daemon_core(&kit, &watch_path, "demo", true));
 
@@ -153,7 +159,7 @@ mod tests {
     #[test]
     fn daemon_core_accepts_custom_debounce() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 500);
+        let kit = nexus_for_db_with_debounce(db.to_str().unwrap(), 500);
         let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo", false)
             .expect_err("should error on nonexistent path");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
@@ -162,7 +168,7 @@ mod tests {
     #[test]
     fn daemon_core_accepts_default_debounce() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
+        let kit = nexus_for_db(db.to_str().unwrap());
         let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo", false)
             .expect_err("should error on nonexistent path");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
@@ -176,7 +182,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "main.rs", "fn main() {}\n");
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
+        let kit = nexus_for_db_with_debounce(db.to_str().unwrap(), 200);
         let watch_path = tmp.path().to_str().unwrap().to_string();
         let handle = thread::spawn(move || daemon_core(&kit, &watch_path, "demo", true));
 
@@ -193,7 +199,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "main.rs", "fn main() {}\n");
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
+        let kit = nexus_for_db_with_debounce(db.to_str().unwrap(), 200);
         let watch_path = tmp.path().to_str().unwrap().to_string();
         let handle = thread::spawn(move || daemon_core(&kit, &watch_path, "demo", true));
 

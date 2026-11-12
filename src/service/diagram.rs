@@ -23,7 +23,7 @@ use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(feature = "diagram")]
 use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "diagram", any(feature = "cli", feature = "mcp")))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 #[cfg(all(feature = "diagram", any(feature = "cli", feature = "mcp")))]
 use sdforge::forge;
 #[cfg(all(feature = "diagram", any(feature = "cli", feature = "mcp")))]
@@ -49,7 +49,7 @@ pub struct DiagramOutput {
 #[cfg(feature = "diagram")]
 #[allow(clippy::too_many_arguments)]
 pub fn run_diagram(
-    kit: &crate::kit::AsyncKit<crate::kit::AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     project: &str,
     output_path: &str,
     quality: &str,
@@ -68,7 +68,7 @@ pub fn run_diagram(
         ));
     }
 
-    let storage = kit.require::<crate::kit::StorageModule>()?;
+    let storage = nexus.storage()?;
     let project_id = resolve_project_id(&*storage, project)?;
     let overview: ArchitectureOverview =
         ArchitectureAnalyzer::new(&*storage).overview(&project_id)?;
@@ -316,9 +316,9 @@ async fn diagram(
     viewer_data: String,
     viewer_url: String,
 ) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let out = run_diagram(
-        &kit,
+        &nexus,
         &project,
         &output,
         &quality,
@@ -356,9 +356,9 @@ async fn diagram_mcp(
     viewer_data: String,
     viewer_url: String,
 ) -> Result<Receipt, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     run_diagram(
-        &kit,
+        &nexus,
         &project,
         &output,
         &quality,
@@ -385,6 +385,10 @@ mod tests {
         (dir, path)
     }
 
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
+    }
+
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(db.to_path_buf());
         tokio::runtime::Runtime::new()
@@ -408,8 +412,8 @@ mod tests {
     #[test]
     fn run_diagram_writes_artifact_and_receipt() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_two_modules(&*storage);
         let out_dir = TempDir::new().unwrap();
         let target = out_dir.path().join("arch.html");
@@ -439,8 +443,8 @@ mod tests {
     #[test]
     fn run_diagram_viewer_url_swaps_stage_and_writes_snapshot() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_two_modules(&*storage);
         let out_dir = TempDir::new().unwrap();
         let target = out_dir.path().join("arch3d.html");
@@ -497,8 +501,8 @@ mod tests {
     #[test]
     fn run_diagram_is_deterministic() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_two_modules(&*storage);
         let out_dir = TempDir::new().unwrap();
         let t1 = out_dir.path().join("one.html");
@@ -539,8 +543,8 @@ mod tests {
     #[test]
     fn run_diagram_types_controller_module_as_interface() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_two_modules(&*storage);
         let out_dir = TempDir::new().unwrap();
         let target = out_dir.path().join("arch.html");
@@ -568,8 +572,8 @@ mod tests {
     #[test]
     fn run_diagram_rejects_unknown_profile_and_empty_output() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_two_modules(&*storage);
         let out_dir = TempDir::new().unwrap();
         let target = out_dir.path().join("a.html");

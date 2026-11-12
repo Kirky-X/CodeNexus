@@ -12,6 +12,7 @@ pub mod connection;
 pub mod error;
 pub mod loader;
 pub mod module;
+pub(crate) mod open;
 pub mod quality;
 pub mod repository;
 pub mod schema;

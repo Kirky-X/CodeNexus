@@ -9,7 +9,7 @@
 //!
 //! # Why AsyncKit<AsyncReady> and not Kit
 //!
-//! trait-kit 0.3's synchronous `Kit` uses `RefCell` internally and is
+//! trait-kit 0.5.0-rc.12's synchronous `Kit` uses `RefCell` internally and is
 //! therefore `!Send + !Sync`. A `static Mutex<Option<Arc<Kit>>>` requires
 //! `Send + Sync`, so we store `AsyncKit<AsyncReady>` instead — it is backed
 //! by `Arc<RwLock<...>>` and implements `Send + Sync`. See `kit/mod.rs` and
@@ -64,6 +64,16 @@ pub fn kit() -> Option<Arc<AsyncKit<AsyncReady>>> {
         .map_err(|e| tracing::error!("Kit mutex poisoned: {e}"))
         .ok()
         .and_then(|guard| guard.clone())
+}
+
+/// Returns the single global [`Nexus`] facade if the kit is initialized.
+///
+/// This is the one sanctioned global access point for service handlers:
+/// new code takes `&Nexus` as an argument, and only forge wrappers (which
+/// cannot receive injected state) call this.
+#[must_use]
+pub fn nexus() -> Option<crate::sdk::Nexus> {
+    crate::sdk::Nexus::from_runtime()
 }
 
 /// Resets the global Kit. Test-only — allows tests to avoid polluting each

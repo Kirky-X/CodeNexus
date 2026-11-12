@@ -5,13 +5,12 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 use crate::model::NodeLabel;
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(feature = "cli")]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 use crate::storage::schema::escape_identifier;
 
 #[cfg(feature = "cli")]
@@ -43,10 +42,10 @@ pub struct SupplyOutput {
 
 /// Core logic — aggregates the external-dependency view (testable core).
 pub fn run_supply(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     project: &str,
 ) -> Result<SupplyOutput, CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+    let storage = nexus.storage()?;
     let table = escape_identifier(NodeLabel::ExternalPackage.table_name());
 
     let mut packages: BTreeMap<String, SupplyPackage> = BTreeMap::new();
@@ -128,8 +127,8 @@ pub fn run_supply(
     cli = true
 )]
 async fn supply(project: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = run_supply(&kit, &project).map_err(|e| to_api_error(e, "supply_error"))?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    let output = run_supply(&nexus, &project).map_err(|e| to_api_error(e, "supply_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
@@ -139,10 +138,10 @@ async fn supply(project: String) -> Result<(), ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
+    use crate::kit::{build_kit, KitBootstrapConfig};
     use tempfile::TempDir;
 
-    fn fresh_kit() -> (TempDir, AsyncKit<AsyncReady>) {
+    fn fresh_kit() -> (TempDir, crate::sdk::Nexus) {
         let dir = TempDir::new().unwrap();
         let db = dir.path().join("supply_db");
         let config = KitBootstrapConfig::new(db);
@@ -150,11 +149,11 @@ mod tests {
             .unwrap()
             .block_on(build_kit(&config))
             .unwrap();
-        (dir, kit)
+        (dir, crate::sdk::Nexus::from_kit(kit))
     }
 
-    fn seed_supply_graph(kit: &AsyncKit<AsyncReady>) {
-        let storage = kit.require::<StorageModule>().unwrap();
+    fn seed_supply_graph(kit: &crate::sdk::Nexus) {
+        let storage = kit.storage().unwrap();
         // Two packages: serde_json (3 dependents) and leftpad (1 dependent).
         storage
             .execute("CREATE (:File {id: 'f1', project: 'demo', name: 'a.rs', filePath: '/src/a.rs', language: 'rust', hash: '', lineCount: 0});")

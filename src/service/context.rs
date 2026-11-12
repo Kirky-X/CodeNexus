@@ -3,8 +3,8 @@
 
 //! Context command: show a 360-degree view of a symbol.
 
-#[cfg(any(feature = "cli", feature = "mcp", test))]
-use crate::kit::{AsyncKit, AsyncReady, StorageModule, TraceModule};
+#[cfg(test)]
+use crate::kit::{AsyncKit, AsyncReady};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::error::CodeNexusError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -12,7 +12,7 @@ use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::project::resolve_project_id;
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 use crate::trace::context::{
     collect_incoming, collect_outgoing, collect_processes, resolve_start_id, ContextCollector,
     SymbolContext,
@@ -30,11 +30,11 @@ use sdforge::prelude::ApiError;
 /// Runs context against an injected Kit (testable core).
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 pub fn run_context(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     symbol: &str,
     depth: u32,
 ) -> Result<ContextOutput, CodeNexusError> {
-    let trace_engine = kit.require::<TraceModule>()?;
+    let trace_engine = nexus.trace()?;
     let (graph, _truncated) =
         trace_engine.load_graph(symbol, depth as usize, MAX_SUBGRAPH_NODES)?;
     let start_id = resolve_start_id(&graph, symbol)
@@ -73,11 +73,11 @@ pub fn run_context(
 /// failures stay internal.
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 pub fn run_context_enhanced(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     project: &str,
     symbol: &str,
 ) -> Result<SymbolContext, CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+    let storage = nexus.storage()?;
     let project_id = resolve_project_id(&*storage, project)?;
     let collector = ContextCollector::new(&*storage);
     collector.collect(&project_id, symbol).map_err(|e| match e {
@@ -160,9 +160,9 @@ async fn context(
     #[param(kind = "body")] budget: Option<usize>,
 ) -> Result<(), ApiError> {
     let budget = validate_budget(budget).map_err(|e| to_api_error(e, "context_error"))?;
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     if enhanced {
-        let result = run_context_enhanced(&kit, &project, &symbol)
+        let result = run_context_enhanced(&nexus, &project, &symbol)
             .map_err(|e| to_api_error(e, "context_error"))?;
         let json = render_json(&result, budget)
             .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))?;
@@ -173,14 +173,14 @@ async fn context(
         // from an unrelated project. run_context_enhanced already calls
         // resolve_project_id internally.
         if !project.trim().is_empty() {
-            let storage = kit
-                .require::<StorageModule>()
+            let storage = nexus
+                .storage()
                 .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))?;
             resolve_project_id(&*storage, &project)
                 .map_err(|e| to_api_error(e, "context_error"))?;
         }
         let result =
-            run_context(&kit, &symbol, depth).map_err(|e| to_api_error(e, "context_error"))?;
+            run_context(&nexus, &symbol, depth).map_err(|e| to_api_error(e, "context_error"))?;
         let json = render_json(&result, budget)
             .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))?;
         println!("{json}");
@@ -209,22 +209,22 @@ async fn context_mcp(
     project: String,
     enhanced: bool,
 ) -> Result<serde_json::Value, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     if enhanced {
-        let result = run_context_enhanced(&kit, &project, &symbol)
+        let result = run_context_enhanced(&nexus, &project, &symbol)
             .map_err(|e| to_api_error(e, "context_error"))?;
         serde_json::to_value(&result)
             .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))
     } else {
         if !project.trim().is_empty() {
-            let storage = kit
-                .require::<StorageModule>()
+            let storage = nexus
+                .storage()
                 .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))?;
             resolve_project_id(&*storage, &project)
                 .map_err(|e| to_api_error(e, "context_error"))?;
         }
         let result =
-            run_context(&kit, &symbol, depth).map_err(|e| to_api_error(e, "context_error"))?;
+            run_context(&nexus, &symbol, depth).map_err(|e| to_api_error(e, "context_error"))?;
         serde_json::to_value(&result)
             .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))
     }
@@ -241,6 +241,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_context_testdb");
         (dir, path)
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
@@ -326,7 +330,7 @@ mod tests {
     #[test]
     fn run_context_returns_invalid_input_for_unknown_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err =
             run_context(&kit, "nonexistent.symbol", 3).expect_err("unknown symbol should error");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
@@ -344,7 +348,7 @@ mod tests {
     #[test]
     fn run_context_returns_invalid_input_for_empty_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err = run_context(&kit, "", 3).expect_err("empty symbol should error");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
@@ -352,7 +356,7 @@ mod tests {
     #[test]
     fn run_context_returns_invalid_input_at_depth_zero() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err = run_context(&kit, "missing.symbol", 0).expect_err("missing symbol should error");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
@@ -360,7 +364,7 @@ mod tests {
     #[test]
     fn run_context_error_message_format() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err = run_context(&kit, "foo.bar", 2).unwrap_err();
         let msg = format!("{err}");
         assert!(
@@ -372,8 +376,8 @@ mod tests {
     #[test]
     fn run_context_returns_symbol_with_incoming_and_outgoing() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         // Target symbol: demo.do_thing
         storage.execute("CREATE (:Function {id: 'f_target', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/target.rs', startLine: 10, endLine: 20, signature: 'fn do_thing()', returnType: 'void', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create target");
         // Caller: demo.caller → CALLS → demo.do_thing (incoming edge)
@@ -408,8 +412,8 @@ mod tests {
     #[test]
     fn run_context_returns_node_only_at_depth_zero() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_solo', project: 'demo', name: 'solo', qualifiedName: 'demo.solo', filePath: '/src/solo.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create solo");
         storage.execute("CREATE (:Function {id: 'f_other', project: 'demo', name: 'other', qualifiedName: 'demo.other', filePath: '/src/other.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create other");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_solo', target: 'f_other', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
@@ -426,8 +430,8 @@ mod tests {
     #[test]
     fn run_context_resolves_by_short_name_when_unique() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_unique', project: 'demo', name: 'unique_name', qualifiedName: 'demo.unique_name', filePath: '/src/u.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create unique");
 
         // Query by short name (not qualifiedName) — resolve_start_id matches by name.
@@ -443,8 +447,8 @@ mod tests {
     #[test]
     fn run_context_enhanced_fails_on_unknown_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         let err = run_context_enhanced(&kit, "demo", "nonexistent.symbol")
             .expect_err("unknown symbol should error");
@@ -465,8 +469,8 @@ mod tests {
     #[test]
     fn run_context_enhanced_fails_fast_on_ambiguous_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'new', qualifiedName: 'demo.a.new', filePath: '/src/a.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f2', project: 'demo', name: 'new', qualifiedName: 'demo.b.new', filePath: '/src/b.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
@@ -486,8 +490,8 @@ mod tests {
     #[test]
     fn run_context_enhanced_returns_symbol_context() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         // File node required by collect_module_context
         storage.execute("CREATE (:File {id: 'file1', project: 'demo', filePath: '/src/target.rs', language: 'rust'});").expect("create file");
@@ -512,8 +516,8 @@ mod tests {
     #[test]
     fn run_context_enhanced_serializes_to_json() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         storage.execute("CREATE (:File {id: 'file1', project: 'demo', filePath: '/src/mod.rs', language: 'rust'});").expect("create file");
         storage.execute("CREATE (:Function {id: 'f_mod', project: 'demo', name: 'mod_fn', qualifiedName: 'demo.mod_fn', filePath: '/src/mod.rs', startLine: 1, endLine: 5, signature: 'fn mod_fn()', returnType: '()', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
@@ -536,8 +540,8 @@ mod tests {
     #[test]
     fn run_context_enhanced_resolves_project_name_to_id() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         // Project: name "demo" → id "proj_x". Functions store project = ID.
         storage.execute("CREATE (:Project {id: 'proj_x', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         storage.execute("CREATE (:File {id: 'file1', project: 'proj_x', filePath: '/src/target.rs', language: 'rust'});").expect("create file");
@@ -561,8 +565,8 @@ mod tests {
     #[test]
     fn run_context_returns_processes_with_handles_route_edges() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_handler', project: 'demo', name: 'handler', qualifiedName: 'demo.handler', filePath: '/src/h.rs', startLine: 1, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create handler");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:CodeRelation {id: 'e_hr', source: 'f_handler', target: 'r1', type: 'HANDLES_ROUTE', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create HANDLES_ROUTE edge");
@@ -575,8 +579,8 @@ mod tests {
     #[test]
     fn run_context_with_multiple_incoming_and_outgoing() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_target', project: 'demo', name: 'target', qualifiedName: 'demo.target', filePath: '/src/t.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create target");
         storage.execute("CREATE (:Function {id: 'f_c1', project: 'demo', name: 'caller1', qualifiedName: 'demo.caller1', filePath: '/src/c1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller1");
         storage.execute("CREATE (:Function {id: 'f_c2', project: 'demo', name: 'caller2', qualifiedName: 'demo.caller2', filePath: '/src/c2.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller2");
@@ -595,8 +599,8 @@ mod tests {
     #[test]
     fn run_context_serializes_output_to_json() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_solo', project: 'demo', name: 'solo', qualifiedName: 'demo.solo', filePath: '/src/s.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create solo");
 
         let output = run_context(&kit, "demo.solo", 1).expect("context should succeed");

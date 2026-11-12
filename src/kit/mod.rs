@@ -3,12 +3,13 @@
 
 //! Kit — unified capability & configuration registry.
 //!
-//! This module re-exports the trait-kit 0.3 `AsyncKit` API
-//! and the 9 subsystem module types used for capability lookup.
+//! This module re-exports the trait-kit 0.5.0-rc.12 `AsyncKit` API
+//! and the 11 subsystem module types used for capability lookup (7 under the
+//! `minimal` feature set: no Daemon / LSP / Cache / Embed).
 //!
 //! ## AsyncKit vs. Kit
 //!
-//! trait-kit 0.3's synchronous `Kit` uses `RefCell` internally and is
+//! trait-kit 0.5.0-rc.12's synchronous `Kit` uses `RefCell` internally and is
 //! therefore `!Send + !Sync`. CodeNexus stores the kit in a
 //! `static Mutex<Option<Arc<AsyncKit<Ready>>>>` (see `service::runtime`),
 //! which requires `Send + Sync`. We therefore use `AsyncKit`, which is backed
@@ -22,13 +23,13 @@
 // all modules migrated to `build_kit`). No feature gating needed.
 extern crate trait_kit;
 
-// Bootstrap — wires all 9 modules into a fresh AsyncKit in
+// Bootstrap — wires all 11 modules into a fresh AsyncKit in
 // dependency order. Re-exported at the kit module root so callers can
 // write `codenexus::kit::build_kit` and `codenexus::kit::KitBootstrapConfig`.
 pub mod bootstrap;
 pub use bootstrap::{build_kit, KitBootstrapConfig};
 
-// Re-export the trait-kit 0.3 AsyncKit API. These are the canonical
+// Re-export the trait-kit 0.5.0-rc.12 AsyncKit API. These are the canonical
 // imports for call sites that need to interact with the Kit registry.
 // Note: we import `AsyncReady`/`AsyncUnbuilt` (the async-feature re-exports),
 // NOT `Ready`/`Unbuilt` (the synchronous Kit markers). trait-kit exports the
@@ -36,13 +37,13 @@ pub use bootstrap::{build_kit, KitBootstrapConfig};
 // AsyncUnbuilt}` — the two `Ready` types are distinct structs (sync `Ready`
 // in `kit.rs` vs async `Ready` in `async_kit.rs`). Using the wrong one causes
 // a type mismatch: `AsyncKit::build` returns `AsyncKit<async_kit::Ready>`.
-// trait-kit 0.3 renamed `KitError` to `TraitKitError` (ProjectNameError
+// trait-kit renamed `KitError` to `TraitKitError` (ProjectNameError
 // convention); alias preserves the CodeNexus-internal `KitError` name.
 pub use trait_kit::core::meta::{AsyncAutoBuilder, ModuleMeta};
 pub use trait_kit::kit::{AsyncKit, AsyncReady, AsyncUnbuilt};
 pub use trait_kit::TraitKitError as KitError;
 
-// Re-export the 9 module types so call sites can write
+// Re-export the 11 module types so call sites can write
 // `use crate::kit::{AsyncKit, StorageModule, TraceModule}` instead of
 // importing each module from its own crate path. This mirrors the
 // historical convenience where `*Key` types lived in `crate::kit`.
@@ -53,6 +54,8 @@ pub use crate::daemon::DaemonModule;
 #[cfg(feature = "embeddings")]
 pub use crate::embed::EmbedModule;
 pub use crate::index::IndexerModule;
+#[cfg(feature = "lsp")]
+pub use crate::lsp::LspRegistryModule;
 pub use crate::parse::{ExtractorRegistryModule, ParserFactoryModule};
 pub use crate::query::QueryModule;
 pub use crate::resolve::ResolverModule;
@@ -66,8 +69,8 @@ mod tests {
     use super::*;
 
     /// `AsyncKit::new` creates an empty `AsyncKit<Unbuilt>` without
-    /// panicking. This is a smoke test that the trait-kit 0.3 wiring loads
-    /// correctly after the migration from 0.1.0.
+    /// panicking. This is a smoke test that the trait-kit 0.5.0-rc.12 wiring
+    /// loads correctly after the migration from 0.1.0.
     #[test]
     fn async_kit_new_creates_empty_unbuilt_kit() {
         let kit = AsyncKit::new();

@@ -7,8 +7,6 @@ use serde::Serialize;
 
 #[cfg(feature = "api-review")]
 use crate::analysis::api_review::{ApiReviewer, ImpactEntry};
-#[cfg(feature = "api-review")]
-use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use crate::service::error::kit_not_initialized;
 #[cfg(feature = "api-review")]
@@ -18,7 +16,7 @@ use crate::service::error::{to_api_error, wrap_error};
 #[cfg(feature = "api-review")]
 use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "cli", feature = "api-review"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use sdforge::forge;
@@ -46,11 +44,11 @@ pub struct ApiImpactOutput {
 ///   `--endpoint`).
 #[cfg(feature = "api-review")]
 fn api_impact_core(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     project: &str,
     endpoint: &str,
 ) -> Result<ApiImpactOutput, CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+    let storage = nexus.storage()?;
     let project_id = resolve_project_id(&*storage, project)?;
     let reviewer = ApiReviewer::new(&*storage);
     let impact: Vec<ImpactEntry> = if endpoint.is_empty() {
@@ -86,8 +84,8 @@ fn api_impact_core(
     cli = true
 )]
 async fn api_impact(project: String, endpoint: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = api_impact_core(&kit, &project, &endpoint)
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    let output = api_impact_core(&nexus, &project, &endpoint)
         .map_err(|e| to_api_error(e, "api_impact_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
@@ -106,6 +104,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_api_impact_testdb");
         (dir, path)
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
@@ -127,8 +129,8 @@ mod tests {
     #[test]
     fn core_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let result = api_impact_core(&kit, "demo", "/api/users");
         assert!(result.is_ok(), "core should succeed: {:?}", result.err());
@@ -137,8 +139,8 @@ mod tests {
     #[test]
     fn core_with_endpoint_and_handler() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Endpoint {id: 'e1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', expectedSchema: '', parentQn: ''});").expect("create endpoint");
         storage.execute("CREATE (:Handler {id: 'h1', project: 'demo', name: 'list_users', qualifiedName: 'list_users', filePath: '', startLine: 0, endLine: 0, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create handler");
@@ -169,8 +171,8 @@ mod tests {
     #[test]
     fn core_with_empty_endpoint_traverses_all_endpoints() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         // Endpoint 1: /api/users
         storage.execute("CREATE (:Endpoint {id: 'e1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', expectedSchema: '', parentQn: ''});").expect("create endpoint 1");
@@ -204,8 +206,8 @@ mod tests {
     #[test]
     fn core_with_empty_endpoint_no_endpoints_returns_empty() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         // No endpoints created — empty endpoint should still succeed, just
         // with an empty impact list.

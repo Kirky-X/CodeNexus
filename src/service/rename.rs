@@ -17,13 +17,12 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::kit::{AsyncKit, AsyncReady, StorageModule, TraceModule};
 use crate::model::{Graph, Node, NodeId};
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
 #[cfg(feature = "cli")]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 use crate::storage::schema::{escape_cypher_string, escape_identifier};
 use crate::trace::TraceError;
 
@@ -247,8 +246,8 @@ fn file_to_rel_string(file: &Path, root: &Path) -> String {
 }
 
 /// Applies the graph edit via Cypher `SET`.
-fn apply_graph_edit(kit: &AsyncKit<AsyncReady>, edit: &GraphEdit) -> Result<(), CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+fn apply_graph_edit(nexus: &crate::sdk::Nexus, edit: &GraphEdit) -> Result<(), CodeNexusError> {
+    let storage = nexus.storage()?;
     let table = escape_identifier(edit.label.as_str());
     let cypher = format!(
         "MATCH (n:{table}) WHERE n.id = '{id}' SET n.name = '{new_name}', n.qualifiedName = '{new_qn}';",
@@ -363,7 +362,7 @@ pub struct TextEdit {
     cli = true
 )]
 async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
 
     if !is_valid_identifier(&to) {
         return Err(ApiError::InvalidInput {
@@ -387,9 +386,11 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
         });
     }
 
-    let trace = kit
-        .require::<TraceModule>()
-        .map_err(|e| wrap_kit_error("Failed to resolve trace capability", e))?;
+    let trace = nexus.trace().map_err(|e| match e {
+        crate::sdk::NexusError::Kit(err) => {
+            wrap_kit_error("Failed to resolve trace capability", err)
+        }
+    })?;
     let (graph, _truncated) =
         trace
             .load_graph(&from, 2, MAX_SUBGRAPH_NODES)
@@ -445,7 +446,7 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
     };
 
     if apply {
-        apply_graph_edit(&kit, &graph_edit).map_err(|e| to_api_error(e, "rename_error"))?;
+        apply_graph_edit(&nexus, &graph_edit).map_err(|e| to_api_error(e, "rename_error"))?;
         let root = apply_root.ok_or_else(|| {
             to_api_error(
                 CodeNexusError::InvalidInput("apply requires path".to_string()),
@@ -484,6 +485,10 @@ mod tests {
         (dir, path)
     }
 
+    fn nexus_for_db(db: &str) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
+    }
+
     fn build_kit_for_db(db: &str) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(PathBuf::from(db));
         tokio::runtime::Runtime::new()
@@ -496,7 +501,7 @@ mod tests {
     /// (no RenameArgs) so tests can exercise error paths without the
     /// `#[forge]` macro wrapper.
     fn rename_core(
-        kit: &AsyncKit<AsyncReady>,
+        kit: &crate::sdk::Nexus,
         from: &str,
         to: &str,
         path: Option<&str>,
@@ -513,7 +518,7 @@ mod tests {
             ));
         }
 
-        let trace = kit.require::<TraceModule>()?;
+        let trace = kit.trace()?;
         let (graph, _truncated) = trace.load_graph(from, 2, MAX_SUBGRAPH_NODES)?;
         let start_id = resolve_start_id(&graph, from)?
             .ok_or_else(|| TraceError::SymbolNotFound(from.to_string()))?;
@@ -1013,7 +1018,7 @@ mod tests {
     #[test]
     fn core_invalid_new_name_returns_error() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
+        let kit = nexus_for_db(db.to_str().unwrap());
         let err =
             rename_core(&kit, "foo", "1bad", None, false).expect_err("invalid name should error");
         assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
@@ -1022,7 +1027,7 @@ mod tests {
     #[test]
     fn core_apply_without_path_returns_error() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
+        let kit = nexus_for_db(db.to_str().unwrap());
         let err = rename_core(&kit, "foo", "bar", None, true)
             .expect_err("apply without path should error");
         assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
@@ -1031,7 +1036,7 @@ mod tests {
     #[test]
     fn core_missing_symbol_returns_trace_error() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
+        let kit = nexus_for_db(db.to_str().unwrap());
         let err = rename_core(&kit, "nonexistent", "bar", None, false)
             .expect_err("missing symbol should error");
         assert_eq!(err.exit_code(), 2, "TraceError::SymbolNotFound → exit 2");
@@ -1042,8 +1047,8 @@ mod tests {
     #[test]
     fn core_dry_run_succeeds_with_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().unwrap();
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().unwrap();
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
         let result = rename_core(&kit, "a", "b", None, false);
         assert!(
@@ -1056,8 +1061,8 @@ mod tests {
     #[test]
     fn core_apply_updates_graph_name() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().unwrap();
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().unwrap();
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
         let tmp = TempDir::new().unwrap();
         let result = rename_core(&kit, "a", "b", Some(tmp.path().to_str().unwrap()), true);
@@ -1296,8 +1301,8 @@ mod tests {
     #[test]
     fn core_dry_run_with_path_succeeds_without_text_edits() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().unwrap();
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().unwrap();
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/nonexistent/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
         let tmp = TempDir::new().unwrap();
         let result = rename_core(&kit, "a", "b", Some(tmp.path().to_str().unwrap()), false);
@@ -1313,8 +1318,8 @@ mod tests {
     #[test]
     fn core_apply_with_file_not_under_root_succeeds() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().unwrap();
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().unwrap();
         // filePath is absolute but NOT under the passed root → collect_candidate_files
         // excludes it → text_edits empty → apply_text_edits is a no-op.
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
@@ -1330,8 +1335,8 @@ mod tests {
     #[test]
     fn core_dry_run_with_qualified_name_succeeds() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().unwrap();
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().unwrap();
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
 
         // Resolve by qualified name instead of short name
@@ -1346,8 +1351,8 @@ mod tests {
     #[test]
     fn core_apply_updates_qualified_name_in_graph() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().unwrap();
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().unwrap();
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
         let tmp = TempDir::new().unwrap();
         let result = rename_core(&kit, "a", "b", Some(tmp.path().to_str().unwrap()), true);
@@ -1367,8 +1372,8 @@ mod tests {
     #[test]
     fn core_dry_run_with_neighbor_files_collects_candidates() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().unwrap();
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().unwrap();
         let tmp = TempDir::new().unwrap();
         let file_a = tmp.path().join("a.rs");
         let file_b = tmp.path().join("b.rs");

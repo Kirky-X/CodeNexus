@@ -15,14 +15,14 @@ use serde::Serialize;
 use crate::service::export::{ArtifactManifest, ARTIFACT_FORMAT_VERSION, ARTIFACT_MAGIC};
 use crate::storage::StorageConfig;
 
-#[cfg(any(feature = "cli", feature = "mcp", test))]
+#[cfg(test)]
 use crate::kit::{AsyncKit, AsyncReady};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::error::CodeNexusError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -129,13 +129,13 @@ pub fn parse_artifact_header(bytes: &[u8]) -> Result<(ArtifactManifest, usize), 
 /// Runs import against an injected Kit (testable core).
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 pub fn run_import(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     input: &str,
     reindex: bool,
     path: &str,
     name: &str,
 ) -> Result<ImportOutput, CodeNexusError> {
-    let storage_config = kit.config::<StorageConfig>()?;
+    let storage_config = nexus.raw_kit().config::<StorageConfig>()?;
     let db_path = storage_config.db_path.clone();
     let db_path_str = db_path.to_string_lossy().into_owned();
 
@@ -203,7 +203,7 @@ pub fn run_import(
             ));
         }
         let _output =
-            crate::service::index::index_core(kit, &db_path, path, name, false, false, false)?;
+            crate::service::index::index_core(nexus, &db_path, path, name, false, false, false)?;
         reindexed = true;
     }
 
@@ -225,8 +225,8 @@ pub fn run_import(
     cli = true
 )]
 async fn import(input: String, reindex: bool, path: String, name: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let result = run_import(&kit, &input, reindex, &path, &name)
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    let result = run_import(&nexus, &input, reindex, &path, &name)
         .map_err(|e| to_api_error(e, "import_error"))?;
     let json = serde_json::to_string(&result)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "import_error"))?;
@@ -245,6 +245,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_import_testdb");
         (dir, path)
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
@@ -341,7 +345,7 @@ mod tests {
     #[test]
     fn run_import_rejects_payload_digest_mismatch() {
         let (src_dir, src_db) = fresh_db_path();
-        let src_kit = build_kit_for_db(&src_db);
+        let src_kit = nexus_for_db(&src_db);
         let artifact = src_dir.path().join("tamper.cnxp");
 
         crate::service::export::run_export(&src_kit, artifact.to_str().unwrap(), "demo")
@@ -362,7 +366,7 @@ mod tests {
         std::fs::write(&tampered, &tampered_bytes).unwrap();
 
         let (_dst_dir, dst_db) = fresh_db_path();
-        let dst_kit = build_kit_for_db(&dst_db);
+        let dst_kit = nexus_for_db(&dst_db);
         let err = run_import(&dst_kit, tampered.to_str().unwrap(), false, "", "")
             .expect_err("tampered artifact must be rejected");
         match err {
@@ -386,7 +390,7 @@ mod tests {
     #[test]
     fn run_import_returns_error_for_nonexistent_artifact() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err = run_import(&kit, "/nonexistent/path/artifact.cnxp", false, "", "")
             .expect_err("nonexistent artifact should error");
         match err {
@@ -403,7 +407,7 @@ mod tests {
     #[test]
     fn run_import_returns_error_for_too_small_artifact() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let artifact = dir.path().join("small.cnxp");
         std::fs::write(&artifact, b"CNXP").unwrap(); // Only 4 bytes, < 8
         let err = run_import(&kit, artifact.to_str().unwrap(), false, "", "")
@@ -423,7 +427,7 @@ mod tests {
     #[test]
     fn run_import_returns_error_for_bad_magic() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let artifact = dir.path().join("badmagic.cnxp");
         let mut data = b"BADM".to_vec();
         data.extend(&[0u8, 0, 0, 0]); // manifest_len = 0
@@ -441,7 +445,7 @@ mod tests {
     #[test]
     fn run_import_returns_error_for_truncated_artifact() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let artifact = dir.path().join("truncated.cnxp");
         let mut data = ARTIFACT_MAGIC.to_vec();
         data.extend(&100u32.to_le_bytes()); // manifest_len = 100
@@ -463,7 +467,7 @@ mod tests {
     #[test]
     fn run_import_returns_error_for_version_mismatch() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let artifact = dir.path().join("badversion.cnxp");
         let manifest = ArtifactManifest {
             format_version: "0.0".to_string(), // Wrong version
@@ -499,7 +503,7 @@ mod tests {
     #[test]
     fn run_import_returns_error_for_malformed_manifest_json() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let artifact = dir.path().join("malformed.cnxp");
         let bad_manifest = b"{ this is not valid json";
         let mut data = ARTIFACT_MAGIC.to_vec();
@@ -528,7 +532,7 @@ mod tests {
     #[test]
     fn run_import_returns_error_for_zero_manifest_len() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let artifact = dir.path().join("zerolen.cnxp");
         let mut data = ARTIFACT_MAGIC.to_vec();
         data.extend(&0u32.to_le_bytes()); // manifest_len = 0
@@ -544,7 +548,7 @@ mod tests {
     #[test]
     fn run_import_returns_error_for_reindex_without_path() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let artifact = dir.path().join("valid.cnxp");
         let manifest = ArtifactManifest {
             format_version: ARTIFACT_FORMAT_VERSION.to_string(),
@@ -580,7 +584,7 @@ mod tests {
     #[test]
     fn run_import_returns_error_for_reindex_without_name() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let artifact = dir.path().join("valid2.cnxp");
         let manifest = ArtifactManifest {
             format_version: ARTIFACT_FORMAT_VERSION.to_string(),
@@ -619,7 +623,7 @@ mod tests {
     #[test]
     fn run_import_round_trips_with_export_artifact() {
         let (src_dir, src_db) = fresh_db_path();
-        let src_kit = build_kit_for_db(&src_db);
+        let src_kit = nexus_for_db(&src_db);
         let artifact = src_dir.path().join("roundtrip.cnxp");
 
         let export_output =
@@ -627,7 +631,7 @@ mod tests {
                 .expect("run_export should succeed");
 
         let (_dst_dir, dst_db) = fresh_db_path();
-        let dst_kit = build_kit_for_db(&dst_db);
+        let dst_kit = nexus_for_db(&dst_db);
         let import_output = run_import(&dst_kit, artifact.to_str().unwrap(), false, "", "")
             .expect("import should succeed for valid artifact");
 
@@ -650,7 +654,7 @@ mod tests {
     #[test]
     fn run_import_with_reindex_succeeds() {
         let (src_dir, src_db) = fresh_db_path();
-        let src_kit = build_kit_for_db(&src_db);
+        let src_kit = nexus_for_db(&src_db);
         let artifact = src_dir.path().join("reindex.cnxp");
 
         crate::service::export::run_export(&src_kit, artifact.to_str().unwrap(), "demo")
@@ -664,7 +668,7 @@ mod tests {
         .unwrap();
 
         let (_dst_dir, dst_db) = fresh_db_path();
-        let dst_kit = build_kit_for_db(&dst_db);
+        let dst_kit = nexus_for_db(&dst_db);
         let import_output = run_import(
             &dst_kit,
             artifact.to_str().unwrap(),
@@ -757,6 +761,7 @@ mod tests {
             let config = KitBootstrapConfig::new(src_db.to_path_buf());
             build_kit(&config).await.expect("build_kit")
         });
+        let src_kit = crate::sdk::Nexus::from_kit(src_kit);
         let artifact = src_dir.path().join("wrapper_roundtrip.cnxp");
 
         // Export to create a valid artifact.

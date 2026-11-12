@@ -3,9 +3,6 @@
 
 use serde::Serialize;
 
-use crate::kit::StorageModule;
-#[cfg(any(feature = "cli", feature = "mcp"))]
-use crate::kit::{AsyncKit, AsyncReady};
 use crate::service::detect_changes::{run_detect_changes, AffectedSymbolOutput};
 use crate::service::error::CodeNexusError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -13,7 +10,7 @@ use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::project::resolve_project_id;
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::forge;
@@ -162,7 +159,7 @@ fn render_markdown(output: &CiGateOutput) -> String {
 /// Core logic — runs the gate against an injected Kit (testable core).
 #[cfg(any(feature = "cli", feature = "mcp"))]
 pub(crate) fn run_ci_gate(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     path: &str,
     base_mode: &str,
     fail_on: &str,
@@ -170,10 +167,10 @@ pub(crate) fn run_ci_gate(
 ) -> Result<CiGateOutput, CodeNexusError> {
     let threshold = parse_fail_on(fail_on)?;
     if !project.trim().is_empty() {
-        let storage = kit.require::<StorageModule>()?;
+        let storage = nexus.storage()?;
         resolve_project_id(&*storage, project)?;
     }
-    let detect = run_detect_changes(kit, path, base_mode)?;
+    let detect = run_detect_changes(nexus, path, base_mode)?;
     let evaluation = evaluate_gate(&detect.affected, threshold);
     let output = CiGateOutput {
         path: path.to_string(),
@@ -211,8 +208,8 @@ async fn ci(
     fail_on: String,
     project: String,
 ) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = run_ci_gate(&kit, &path, &base_mode, &fail_on, &project)
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    let output = run_ci_gate(&nexus, &path, &base_mode, &fail_on, &project)
         .map_err(|e| to_api_error(e, "ci_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;

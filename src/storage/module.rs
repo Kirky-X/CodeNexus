@@ -128,11 +128,16 @@ impl StorageModule {
     pub(crate) fn build_cap(config: &StorageConfig) -> Result<Arc<dyn Storage>, StorageError> {
         // Read-only: skip schema init (read commands target an already-indexed
         // DB whose schema exists; DDL would fail under read_only anyway).
-        let repo = if config.read_only {
-            Repository::open_read_only(&config.db_path)?
-        } else {
-            Repository::open(&config.db_path)?
-        };
+        // Unified open path (`storage::open`): fresh-snapshot semantics +
+        // lock backoff in both modes.
+        let repo = super::open::open_fresh(
+            &config.db_path,
+            if config.read_only {
+                super::open::OpenMode::ReadOnly
+            } else {
+                super::open::OpenMode::ReadWrite
+            },
+        )?;
         Ok(Arc::new(StorageCapability {
             inner: RwLock::new(repo),
         }))

@@ -26,6 +26,7 @@ pub(crate) use orchestrator::{run_batch, run_fetch_samples, run_single_orchestra
 
 use std::path::{Path, PathBuf};
 
+#[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::error::{to_api_error, wrap_error, CodeNexusError};
 use sdforge::forge;
 use sdforge::prelude::ApiError;

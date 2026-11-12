@@ -15,25 +15,27 @@
 //!
 //! ```text
 //! Storage → Parser → Extractor → Indexer → Resolver
-//!        → Query → Trace → Daemon(cfg) → Embed(cfg)
+//!        → Query → Trace → Daemon(cfg) → LSP(cfg) → Cache(cfg) → Embed(cfg)
 //! ```
 //!
-//! Although every module declares `dependencies = &[]` at the type level
-//! (concrete impls are self-contained — see each module's
-//! `Dependency note`), the bootstrap enforces the conceptual dependency
-//! order so that any future module declaring real dependencies can rely on
-//! its dependencies already being present in the Kit.
+//! Most modules declare `dependencies = &[]` at the type level (concrete
+//! impls are self-contained — see each module's `Dependency note`); the
+//! bootstrap enforces the conceptual dependency order. The exception is
+//! `EmbedModule`, which declares `CacheModule` as a real build dependency
+//! whenever the `cache` feature is compiled in (its cache wiring is a hard
+//! build-time input).
 //!
 //! # Feature gating
 //!
-//! `DaemonModule` and `EmbedModule` are only registered when their
-//! respective cargo features (`daemon`, `embed`) are enabled. Under
+//! `DaemonModule`, `LspRegistryModule`, `CacheModule`, and `EmbedModule` are
+//! only registered when their respective cargo features (`daemon`, `lsp`,
+//! `cache`, `embeddings`) are enabled. Under
 //! `--no-default-features --features lang-rust`, the returned Kit contains
-//! exactly 7 capabilities (no `DaemonModule` / `EmbedModule`).
+//! exactly 7 capabilities (no `DaemonModule` / `LspRegistryModule` /
+//! `CacheModule` / `EmbedModule`).
 //!
 //! [`AsyncKit::require`]: crate::kit::AsyncKit::require
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use crate::kit::{
     AsyncKit, AsyncReady, ExtractorRegistryModule, IndexerModule, KitError, ParserFactoryModule,
@@ -48,6 +50,8 @@ use crate::kit::CacheModule;
 use crate::kit::DaemonModule;
 #[cfg(feature = "embeddings")]
 use crate::kit::EmbedModule;
+#[cfg(feature = "lsp")]
+use crate::kit::LspRegistryModule;
 
 // Configs are still imported from their owning modules.
 use crate::index::IndexConfig;
@@ -68,7 +72,7 @@ use crate::cache::CacheConfig;
 
 /// Aggregated configuration for [`build_kit`].
 ///
-/// Collects every parameter the 9 trait-kit modules need:
+/// Collects every parameter the 11 trait-kit modules need:
 ///
 /// | Field            | Used by                                       |
 /// |------------------|-----------------------------------------------|
@@ -210,11 +214,12 @@ pub const DEFAULT_DEBOUNCE_MS: u64 = 2000;
 /// # Order
 ///
 /// `Storage → Parser → Extractor → Indexer → Resolver → Query → Trace →
-///  Daemon(cfg) → Embed(cfg)`
+///  Daemon(cfg) → LSP(cfg) → Cache(cfg) → Embed(cfg)`
 ///
 /// Each module's [`AsyncAutoBuilder::build`] observes its declared
-/// dependencies already present in the Kit (currently all empty, but the
-/// order is enforced for future migrations).
+/// dependencies already present in the Kit (Embed → Cache is the only real
+/// declared edge; the rest are empty and the order is enforced for future
+/// migrations).
 ///
 /// # Errors
 ///
@@ -292,17 +297,17 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
         kit.register::<DaemonModule>()?;
     }
 
-    // 9. Embed (feature-gated) — owns EmbeddingConfig.
-    #[cfg(feature = "embeddings")]
+    // 9. LSP registry (feature-gated) — provider table for semantic hover.
+    #[cfg(feature = "lsp")]
     {
-        kit.set_config(config.embedding_config.clone());
-        kit.register::<EmbedModule>()?;
+        kit.register::<LspRegistryModule>()?;
     }
 
     // 10. Cache (feature-gated) — moka memory cache for content-addressed
-    // caching. Leaf module — no upstream dependencies.
-    // Registered last so all subsystems that might query the cache are
-    // already present.
+    // caching. Must be registered before Embed: `EmbedModule` declares it as a
+    // build dependency, and trait-kit validates declared dependencies at
+    // `build()` (a cache-less Embed combination is rejected as
+    // `DependencyMissing` instead of silently wiring `None`).
     #[cfg(feature = "cache")]
     {
         kit.set_config(CacheConfig::default());
@@ -313,13 +318,11 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
         kit.register_lifecycle::<CacheModule>();
     }
 
-    // 11. LSP registry (feature-gated) — extension → provider table as a kit
-    // capability. Leaf module (static table, no config); the DB-free lsp_*
-    // CLI commands and the indexing enrichment pass construct the same
-    // default registry directly via `crate::lsp::registry::default_registry`.
-    #[cfg(feature = "lsp")]
+    // 11. Embed (feature-gated) — owns EmbeddingConfig.
+    #[cfg(feature = "embeddings")]
     {
-        kit.register::<crate::lsp::LspRegistryModule>()?;
+        kit.set_config(config.embedding_config.clone());
+        kit.register::<EmbedModule>()?;
     }
 
     // Health checkers for `status`'s `health_aggregate` sampling — without a
@@ -339,105 +342,6 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
     ));
 
     Ok(built)
-}
-
-// Convenience: capability accessor helpers
-
-/// Extension trait adding typed `require_*` shortcuts to
-/// [`AsyncKit<AsyncReady>`].
-///
-/// Defined as an extension trait (rather than inherent methods on
-/// `AsyncKit`) because `AsyncKit` is defined in the external `trait_kit`
-/// crate — Rust's orphan rule forbids inherent impls on external types.
-/// The canonical API remains
-/// [`AsyncKit::require`](crate::kit::AsyncKit::require); these helpers are
-/// pure ergonomics for call sites that prefer named methods over turbofish.
-pub trait KitExt {
-    /// Resolves the Storage capability (`Arc<dyn Storage>`).
-    fn require_storage(&self) -> Result<Arc<dyn crate::storage::capability::Storage>, KitError>;
-
-    /// Resolves the Parser capability (`Arc<dyn ParserRegistry>`).
-    fn require_parser(&self)
-        -> Result<Arc<dyn crate::parse::capability::ParserRegistry>, KitError>;
-
-    /// Resolves the Extractor capability (`Arc<dyn ExtractorRegistry>`).
-    fn require_extractor(
-        &self,
-    ) -> Result<Arc<dyn crate::parse::capability::ExtractorRegistry>, KitError>;
-
-    /// Resolves the Indexer capability (`Arc<dyn Indexer>`).
-    fn require_indexer(&self) -> Result<Arc<dyn crate::index::capability::Indexer>, KitError>;
-
-    /// Resolves the Resolver capability (`Arc<dyn Resolver>`).
-    fn require_resolver(&self) -> Result<Arc<dyn crate::resolve::capability::Resolver>, KitError>;
-
-    /// Resolves the Query capability (`Arc<dyn QueryEngine>`).
-    fn require_query(&self) -> Result<Arc<dyn crate::query::capability::QueryEngine>, KitError>;
-
-    /// Resolves the Trace capability (`Arc<dyn TraceEngine>`).
-    fn require_trace(&self) -> Result<Arc<dyn crate::trace::capability::TraceEngine>, KitError>;
-
-    /// Resolves the Daemon capability (`Arc<dyn DaemonRunner>`).
-    #[cfg(feature = "daemon")]
-    fn require_daemon(&self) -> Result<Arc<dyn crate::daemon::capability::DaemonRunner>, KitError>;
-
-    /// Resolves the Embed capability (`Arc<dyn EmbedClient>`).
-    #[cfg(feature = "embeddings")]
-    fn require_embed(&self) -> Result<Arc<dyn crate::embed::client::EmbedClient>, KitError>;
-
-    /// Resolves the Cache capability (`Arc<dyn CacheStore>`).
-    /// Only available when the `cache` feature is enabled.
-    #[cfg(feature = "cache")]
-    fn require_cache(&self) -> Result<Arc<dyn crate::cache::CacheStore>, KitError>;
-}
-
-impl KitExt for AsyncKit<AsyncReady> {
-    fn require_storage(&self) -> Result<Arc<dyn crate::storage::capability::Storage>, KitError> {
-        self.require::<StorageModule>()
-    }
-
-    fn require_parser(
-        &self,
-    ) -> Result<Arc<dyn crate::parse::capability::ParserRegistry>, KitError> {
-        self.require::<ParserFactoryModule>()
-    }
-
-    fn require_extractor(
-        &self,
-    ) -> Result<Arc<dyn crate::parse::capability::ExtractorRegistry>, KitError> {
-        self.require::<ExtractorRegistryModule>()
-    }
-
-    fn require_indexer(&self) -> Result<Arc<dyn crate::index::capability::Indexer>, KitError> {
-        self.require::<IndexerModule>()
-    }
-
-    fn require_resolver(&self) -> Result<Arc<dyn crate::resolve::capability::Resolver>, KitError> {
-        self.require::<ResolverModule>()
-    }
-
-    fn require_query(&self) -> Result<Arc<dyn crate::query::capability::QueryEngine>, KitError> {
-        self.require::<QueryModule>()
-    }
-
-    fn require_trace(&self) -> Result<Arc<dyn crate::trace::capability::TraceEngine>, KitError> {
-        self.require::<TraceModule>()
-    }
-
-    #[cfg(feature = "daemon")]
-    fn require_daemon(&self) -> Result<Arc<dyn crate::daemon::capability::DaemonRunner>, KitError> {
-        self.require::<DaemonModule>()
-    }
-
-    #[cfg(feature = "embeddings")]
-    fn require_embed(&self) -> Result<Arc<dyn crate::embed::client::EmbedClient>, KitError> {
-        self.require::<EmbedModule>()
-    }
-
-    #[cfg(feature = "cache")]
-    fn require_cache(&self) -> Result<Arc<dyn crate::cache::CacheStore>, KitError> {
-        self.require::<CacheModule>()
-    }
 }
 
 // Tests
@@ -477,16 +381,22 @@ mod tests {
         let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
         let kit = build_kit(&config).await.expect("build_kit");
 
-        // require_storage returns Arc<dyn Storage>.
-        let storage = kit.require_storage().expect("require_storage");
+        // require::<StorageModule> returns Arc<dyn Storage>.
+        let storage = kit
+            .require::<StorageModule>()
+            .expect("require::<StorageModule>");
         // Sanity: capability is usable (init_schema is idempotent).
         storage.init_schema().expect("init_schema");
 
-        // require_query returns Arc<dyn QueryEngine>.
-        let _query = kit.require_query().expect("require_query");
+        // require::<QueryModule> returns Arc<dyn QueryEngine>.
+        let _query = kit
+            .require::<QueryModule>()
+            .expect("require::<QueryModule>");
 
-        // require_trace returns Arc<dyn TraceEngine>.
-        let _trace = kit.require_trace().expect("require_trace");
+        // require::<TraceModule> returns Arc<dyn TraceEngine>.
+        let _trace = kit
+            .require::<TraceModule>()
+            .expect("require::<TraceModule>");
     }
 
     /// Bootstrap must fail (not panic) when the database path is invalid.
@@ -537,7 +447,9 @@ mod tests {
             kit.contains::<DaemonModule>(),
             "DaemonModule missing with daemon feature"
         );
-        let _daemon = kit.require_daemon().expect("require_daemon");
+        let _daemon = kit
+            .require::<DaemonModule>()
+            .expect("require::<DaemonModule>");
     }
 
     #[cfg(not(feature = "daemon"))]
@@ -577,7 +489,9 @@ mod tests {
             kit.contains::<EmbedModule>(),
             "EmbedModule missing with embed feature"
         );
-        let embed = kit.require_embed().expect("require_embed");
+        let embed = kit
+            .require::<EmbedModule>()
+            .expect("require::<EmbedModule>");
         // Default is local mode; without a model file, embed must
         // return Unavailable (not MissingApiKey — no API key needed locally).
         // The message is localized, so assert on the locale-independent
@@ -611,7 +525,9 @@ mod tests {
 
         let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
         let kit = build_kit(&config).await.expect("build_kit");
-        let embed = kit.require_embed().expect("require_embed");
+        let embed = kit
+            .require::<EmbedModule>()
+            .expect("require::<EmbedModule>");
         let result = embed.embed(&["hello"]);
         assert!(
             matches!(result, Err(crate::embed::EmbedError::MissingApiKey)),
@@ -622,6 +538,56 @@ mod tests {
                 .map_or("ok", crate::embed::EmbedError::kind)
         );
         std::env::remove_var(crate::embed::EMBED_ENDPOINT_ENV);
+    }
+
+    /// End-to-end proof that the Embed capability is cache-wired by the
+    /// production bootstrap flow.
+    ///
+    /// The embedding endpoint points at a closed port, so any cache miss would
+    /// fail with a transport error. A pre-seeded content-addressed entry must
+    /// come back verbatim — that is only possible when `CachedEmbedClient`
+    /// wraps the client, which in turn only happens when the build-time
+    /// `require::<CacheModule>()` resolved (the T13 regression: same-layer
+    /// build made it permanently `None`).
+    #[cfg(all(feature = "embeddings", feature = "cache"))]
+    #[test]
+    fn build_kit_wires_embed_cache_in_production_flow() {
+        let config = KitBootstrapConfig::new(PathBuf::from(":memory:")).with_embedding_config(
+            EmbeddingConfig {
+                endpoint: Some("http://127.0.0.1:1/v1".to_string()),
+                api_key: Some("cache-wiring-test".to_string()),
+                ..EmbeddingConfig::default()
+            },
+        );
+        // Build synchronously: the HTTP client (created on `embed`) owns a
+        // blocking runtime and must not be dropped inside an async context.
+        let kit = tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(build_kit(&config))
+            .expect("build_kit");
+
+        let cache = kit.require::<CacheModule>().expect("require cache");
+        let key = format!(
+            "embed:{}",
+            crate::index::hash::compute_content_hash(b"hello")
+        );
+        let expected: Vec<f32> = (0..crate::embed::EMBEDDING_DIM)
+            .map(|i| i as f32 / 1000.0)
+            .collect();
+        let mut bytes = Vec::with_capacity(expected.len() * 4);
+        for value in &expected {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        cache.set(&key, bytes);
+
+        let embed = kit
+            .require::<EmbedModule>()
+            .expect("require::<EmbedModule>");
+        let vectors = embed
+            .embed(&["hello"])
+            .expect("cache hit must bypass the unreachable endpoint");
+        assert_eq!(vectors.len(), 1);
+        assert_eq!(vectors[0], expected);
     }
 
     #[cfg(feature = "embeddings")]
@@ -656,27 +622,8 @@ mod tests {
         assert!(kit.contains::<TraceModule>());
     }
 
-    /// Convenience helpers (`require_storage`, etc.) return the same `Arc`
-    /// as a direct `require::<Module>` call.
-    #[tokio::test]
-    async fn convenience_helpers_match_direct_require() {
-        let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
-        let kit = build_kit(&config).await.expect("build_kit");
-
-        let via_helper = kit.require_storage().expect("require_storage");
-        let via_direct: Arc<dyn crate::storage::capability::Storage> = kit
-            .require::<StorageModule>()
-            .expect("require::<StorageModule>");
-        assert!(
-            Arc::ptr_eq(&via_helper, &via_direct),
-            "convenience helper must return the same Arc"
-        );
-    }
-
-    /// `require_parser`, `require_extractor`, `require_indexer`, and
-    /// `require_resolver` must all return their registered capabilities.
-    /// These are the remaining KitExt convenience helpers not exercised by
-    /// `build_kit_require_returns_registered_arc`.
+    /// Direct `require::<Module>` calls must return the registered
+    /// capabilities for every non-feature-gated module.
     #[cfg(any(
         feature = "lang-c",
         feature = "lang-rust",
@@ -701,63 +648,31 @@ mod tests {
         feature = "lang-verilog",
     ))]
     #[tokio::test]
-    async fn convenience_helpers_return_registered_capabilities() {
+    async fn direct_require_returns_registered_capabilities() {
         let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
         let kit = build_kit(&config).await.expect("build_kit");
 
-        // require_parser returns Arc<dyn ParserRegistry> — create_parser works.
-        let parser = kit.require_parser().expect("require_parser");
-        let langs = parser.supported_languages();
+        let parser = kit
+            .require::<ParserFactoryModule>()
+            .expect("require::<ParserFactoryModule>");
         assert!(
-            !langs.is_empty(),
+            !parser.supported_languages().is_empty(),
             "parser should support at least one language"
         );
 
-        // require_extractor returns Arc<dyn ExtractorRegistry> — get_extractor works.
-        let extractor = kit.require_extractor().expect("require_extractor");
-        let ext_langs = extractor.supported_languages();
+        let extractor = kit
+            .require::<ExtractorRegistryModule>()
+            .expect("require::<ExtractorRegistryModule>");
         assert!(
-            !ext_langs.is_empty(),
+            !extractor.supported_languages().is_empty(),
             "extractor should support at least one language"
         );
 
-        // require_indexer returns Arc<dyn Indexer>.
-        let _indexer = kit.require_indexer().expect("require_indexer");
-
-        // require_resolver returns Arc<dyn Resolver>.
-        let _resolver = kit.require_resolver().expect("require_resolver");
-    }
-
-    /// Each convenience helper's returned `Arc` must be pointer-equal to the
-    /// `Arc` returned by a direct `require::<Module>` call (they delegate,
-    /// so they must return the same registration).
-    #[tokio::test]
-    async fn convenience_helpers_all_match_direct_require() {
-        let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
-        let kit = build_kit(&config).await.expect("build_kit");
-
-        let parser_helper = kit.require_parser().expect("require_parser");
-        let parser_direct: Arc<dyn crate::parse::capability::ParserRegistry> = kit
-            .require::<ParserFactoryModule>()
-            .expect("require::<ParserFactoryModule>");
-        assert!(Arc::ptr_eq(&parser_helper, &parser_direct));
-
-        let extractor_helper = kit.require_extractor().expect("require_extractor");
-        let extractor_direct: Arc<dyn crate::parse::capability::ExtractorRegistry> = kit
-            .require::<ExtractorRegistryModule>()
-            .expect("require::<ExtractorRegistryModule>");
-        assert!(Arc::ptr_eq(&extractor_helper, &extractor_direct));
-
-        let indexer_helper = kit.require_indexer().expect("require_indexer");
-        let indexer_direct: Arc<dyn crate::index::capability::Indexer> = kit
+        let _indexer = kit
             .require::<IndexerModule>()
             .expect("require::<IndexerModule>");
-        assert!(Arc::ptr_eq(&indexer_helper, &indexer_direct));
-
-        let resolver_helper = kit.require_resolver().expect("require_resolver");
-        let resolver_direct: Arc<dyn crate::resolve::capability::Resolver> = kit
+        let _resolver = kit
             .require::<ResolverModule>()
             .expect("require::<ResolverModule>");
-        assert!(Arc::ptr_eq(&resolver_helper, &resolver_direct));
     }
 }

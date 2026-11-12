@@ -9,8 +9,6 @@ use serde::Serialize;
 use crate::analysis::dead_code::{DeadCodeConfig, DeadCodeDetector, DeadCodeEntry};
 #[cfg(feature = "analysis")]
 use crate::diagnostics::{Diagnostic, Severity};
-#[cfg(feature = "analysis")]
-use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(test, feature = "cli", feature = "analysis"))]
 use crate::model::EdgeType;
 #[cfg(all(any(feature = "cli", feature = "mcp"), feature = "analysis"))]
@@ -22,7 +20,7 @@ use crate::service::error::CodeNexusError;
 #[cfg(feature = "analysis")]
 use crate::service::project::resolve_project_id;
 #[cfg(all(any(feature = "cli", feature = "mcp"), feature = "analysis"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 #[cfg(feature = "analysis")]
 use crate::service::status::{git_head_commit, is_stale, resolve_project_root};
 #[cfg(feature = "analysis")]
@@ -148,10 +146,10 @@ fn build_dead_code_config(params: &DeadCodeParams) -> DeadCodeConfig {
 /// empty string means no extra patterns (defaults to `main`, `Main`, `__main__`).
 #[cfg(feature = "analysis")]
 pub fn run_dead_code(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     params: &DeadCodeParams,
 ) -> Result<DeadCodeOutput, CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+    let storage = nexus.storage()?;
     let project_id = resolve_project_id(&*storage, &params.project)?;
     // Fetch the full Project record to read `lastCommit` (indexed_commit)
     // and `rootPath` (for `git rev-parse HEAD` at query time). Use the O(1)
@@ -166,7 +164,7 @@ pub fn run_dead_code(
     // Resolve rootPath with fallback for legacy relative paths so
     // `git rev-parse HEAD` runs against the actual project root, not the
     // process CWD. See `status::resolve_project_root` for the heuristic.
-    let storage_config = kit.config::<StorageConfig>()?;
+    let storage_config = nexus.raw_kit().config::<StorageConfig>()?;
     let root = resolve_project_root(&project_record.root_path, &storage_config.db_path);
     let current_head = git_head_commit(&root);
     let stale = is_stale(&indexed_commit, &current_head);
@@ -215,7 +213,7 @@ async fn dead_code(
     check_reflection: bool,
     edge_types: String,
 ) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let params = DeadCodeParams {
         project,
         entry,
@@ -225,7 +223,7 @@ async fn dead_code(
         check_reflection,
         edge_types,
     };
-    let output = run_dead_code(&kit, &params).map_err(|e| to_api_error(e, "dead_code_error"))?;
+    let output = run_dead_code(&nexus, &params).map_err(|e| to_api_error(e, "dead_code_error"))?;
     let json = serde_json::to_string(&output)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "dead_code_error"))?;
     println!("{json}");
@@ -250,7 +248,7 @@ async fn dead_code_mcp(
     check_reflection: bool,
     edge_types: String,
 ) -> Result<DeadCodeOutput, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let params = DeadCodeParams {
         project,
         entry,
@@ -260,7 +258,7 @@ async fn dead_code_mcp(
         check_reflection,
         edge_types,
     };
-    run_dead_code(&kit, &params).map_err(|e| to_api_error(e, "dead_code_error"))
+    run_dead_code(&nexus, &params).map_err(|e| to_api_error(e, "dead_code_error"))
 }
 
 #[cfg(all(test, feature = "cli", feature = "analysis"))]
@@ -275,6 +273,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_dead_code_testdb");
         (dir, path)
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
@@ -328,8 +330,8 @@ mod tests {
     #[test]
     fn run_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let result = run_dead_code(&kit, &test_params());
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
@@ -338,8 +340,8 @@ mod tests {
     #[test]
     fn run_returns_dead_function() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_foo', project: 'demo', name: 'foo', qualifiedName: 'demo.foo', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create foo");
         let result = run_dead_code(&kit, &test_params());
@@ -349,8 +351,8 @@ mod tests {
     #[test]
     fn run_with_custom_entry_patterns() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_main', project: 'demo', name: 'main', qualifiedName: 'demo.main', filePath: '/src/main.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create main");
         let result = run_dead_code(&kit, &{
@@ -418,8 +420,8 @@ mod tests {
     #[test]
     fn run_dead_code_with_check_exported_excludes_exported() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_pub', project: 'demo', name: 'pub_fn', qualifiedName: 'demo.pub_fn', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create exported");
         storage.execute("CREATE (:Function {id: 'f_priv', project: 'demo', name: 'priv_fn', qualifiedName: 'demo.priv_fn', filePath: '/src/lib.rs', startLine: 6, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create private");
@@ -452,8 +454,8 @@ mod tests {
     #[test]
     fn run_dead_code_with_check_ffi_excludes_ffi() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_ffi', project: 'demo', name: 'ffi_fn', qualifiedName: 'demo.ffi_fn', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: 'extern \"C\" fn ffi_fn()', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create ffi");
         storage.execute("CREATE (:Function {id: 'f_plain', project: 'demo', name: 'plain', qualifiedName: 'demo.plain', filePath: '/src/lib.rs', startLine: 6, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create plain");
@@ -482,8 +484,8 @@ mod tests {
     #[test]
     fn run_dead_code_with_custom_edge_types() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
@@ -530,8 +532,8 @@ mod tests {
     #[test]
     fn run_dead_code_returns_output_struct() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output = run_dead_code(&kit, &test_params()).expect("run should succeed");
         assert_eq!(output.project, "demo");
@@ -625,8 +627,8 @@ mod tests {
     #[test]
     fn run_dead_code_with_check_dynamic_dispatch_excludes_trait_impl() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         // Trait impl method (e.g. `impl Display for X { fn fmt {} }`)
         storage.execute("CREATE (:Method {id: 'm_fmt', project: 'demo', name: 'fmt', qualifiedName: 'demo.src.lib.rs.fmt#Display', filePath: '/src/lib.rs', startLine: 5, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create trait impl");
@@ -727,8 +729,8 @@ mod tests {
     #[test]
     fn test_dead_code_output_includes_indexed_commit_when_set() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         // rootPath points to a non-git directory → current_head empty.
         seed_project_with(&*storage, "demo", "demo", "/nonexistent/path", "abc123");
         let output = run_dead_code(&kit, &test_params()).expect("run");
@@ -786,8 +788,8 @@ mod tests {
         }
 
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         let root = tmp.path().to_string_lossy().into_owned();
         // indexed_commit deliberately differs from current HEAD.
         seed_project_with(&*storage, "demo", "demo", &root, "abc123");
@@ -846,8 +848,8 @@ mod tests {
         }
 
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         let root = tmp.path().to_string_lossy().into_owned();
         // indexed_commit == current HEAD → fresh.
         seed_project_with(&*storage, "demo", "demo", &root, &head);
@@ -919,8 +921,8 @@ mod tests {
         std::fs::create_dir_all(&db_dir).unwrap();
         let db_path = db_dir.join("test.lbug");
 
-        let kit = build_kit_for_db(&db_path);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db_path);
+        let storage = kit.storage().expect("storage");
         // rootPath deliberately set to "." (legacy). lastCommit = current HEAD
         // so is_stale should be false once the fallback resolves the root.
         seed_project_with(&*storage, "demo", "demo", ".", &head);

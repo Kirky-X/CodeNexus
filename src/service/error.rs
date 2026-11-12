@@ -224,7 +224,7 @@ fn next_error_id() -> String {
 ///
 /// The caller must ensure `E: Send + Sync` — required by sdforge's
 /// `ApiError::internal_with_source`. For `KitError` (which is `Send` but
-/// not `Sync` due to trait-kit 0.3's `Box<dyn StdError + Send + 'static>`),
+/// not `Sync` due to trait-kit 0.5.0-rc.12's `Box<dyn StdError + Send + 'static>`),
 /// use [`wrap_kit_error`] instead.
 #[cfg(any(feature = "cli", feature = "mcp"))]
 pub fn wrap_error<E: std::error::Error + Send + Sync + 'static>(
@@ -236,7 +236,7 @@ pub fn wrap_error<E: std::error::Error + Send + Sync + 'static>(
 
 /// Wraps a [`KitError`] as an `ApiError::Internal` with a unique `error_id`.
 ///
-/// Needed because trait-kit 0.3's `KitError` uses
+/// Needed because trait-kit 0.5.0-rc.12's `KitError` uses
 /// `Box<dyn StdError + Send + 'static>` (no `Sync` bound), making it
 /// `Send + !Sync`. `ApiError::internal_with_source` requires `Send + Sync`,
 /// so we convert the `KitError` to a string and use `ApiError::internal_error`.
@@ -285,7 +285,7 @@ fn ambiguous_symbol_api_error(symbol: &str, candidates: &[String], message: Stri
 ///
 /// # Why not `internal_with_source`
 ///
-/// `CodeNexusError::Kit(#[from] KitError)` makes `CodeNexusError: !Sync` (trait-kit 0.3's
+/// `CodeNexusError::Kit(#[from] KitError)` makes `CodeNexusError: !Sync` (trait-kit 0.5.0-rc.12's
 /// `KitError` uses `Box<dyn StdError + Send + 'static>` without `Sync`).
 /// `ApiError::internal_with_source` requires `Send + Sync`, so we cannot pass
 /// `CodeNexusError` as a source. We convert to a string-based `ApiError::internal_error`
@@ -338,6 +338,24 @@ pub fn to_api_error(e: CodeNexusError, tag: &str) -> ApiError {
         other => {
             let message = format!("{other}");
             ApiError::internal_error(message, tag)
+        }
+    }
+}
+
+/// SDK facade error → 统一错误面：`NexusError` 当前单变体（`Kit(KitError)`），
+/// 直接透传内层 `KitError`（`Kit` 变体已有 `#[from]`，此处显式转发保持
+/// future 变体扩展时的单点适配位）。
+#[cfg(feature = "lsp")]
+impl From<crate::lsp::LspRegistryError> for CodeNexusError {
+    fn from(err: crate::lsp::LspRegistryError) -> Self {
+        CodeNexusError::InvalidInput(err.to_string())
+    }
+}
+
+impl From<crate::sdk::NexusError> for CodeNexusError {
+    fn from(err: crate::sdk::NexusError) -> Self {
+        match err {
+            crate::sdk::NexusError::Kit(kit) => Self::Kit(kit),
         }
     }
 }

@@ -14,15 +14,12 @@ use std::str::FromStr;
 
 use serde::Serialize;
 
-use crate::kit::StorageModule;
-#[cfg(any(feature = "cli", feature = "mcp"))]
-use crate::kit::{AsyncKit, AsyncReady};
 use crate::model::NodeLabel;
 use crate::service::error::CodeNexusError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 use crate::storage::schema::node_table_columns;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -346,7 +343,7 @@ pub struct AffectedSymbolOutput {
 /// - [`CodeNexusError::Kit`] — the storage capability is unavailable.
 #[cfg(any(feature = "cli", feature = "mcp"))]
 pub(crate) fn run_detect_changes(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     path: &str,
     mode: &str,
 ) -> Result<DetectChangesOutput, CodeNexusError> {
@@ -366,7 +363,7 @@ pub(crate) fn run_detect_changes(
     let hunks = parse_unified_diff(&diff_output);
     let files_changed = hunks.len();
 
-    let storage = kit.require::<StorageModule>()?;
+    let storage = nexus.storage()?;
     let mut affected: Vec<AffectedSymbolOutput> = Vec::new();
     for (rel_path, ranges) in &hunks {
         let abs_path = repo_root.join(rel_path);
@@ -403,8 +400,8 @@ pub(crate) fn run_detect_changes(
     cli = true
 )]
 async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = run_detect_changes(&kit, &path, &mode)
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    let output = run_detect_changes(&nexus, &path, &mode)
         .map_err(|e| to_api_error(e, "detect_changes_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
@@ -421,15 +418,15 @@ async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
     description = "Map uncommitted git changes to indexed symbols with risk classification (low/medium/high by incoming edge count). Params: path — repository root (required); mode — unstaged|staged|head (default unstaged)."
 )]
 async fn detect_changes_mcp(path: String, mode: String) -> Result<DetectChangesOutput, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    run_detect_changes(&kit, &path, &mode).map_err(|e| to_api_error(e, "detect_changes_error"))
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    run_detect_changes(&nexus, &path, &mode).map_err(|e| to_api_error(e, "detect_changes_error"))
 }
 
 #[cfg(test)]
 #[cfg(any(feature = "cli", feature = "mcp"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig};
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -437,6 +434,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_detect_testdb");
         (dir, path)
+    }
+
+    fn nexus_for_db(db: &str) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
     }
 
     fn build_kit_for_db(db: &str) -> AsyncKit<AsyncReady> {
@@ -450,7 +451,7 @@ mod tests {
     /// Thin delegate to the production [`run_detect_changes`] core, kept so
     /// existing error-path tests keep their name and `Result<(), _>` shape.
     fn detect_changes_core(
-        kit: &AsyncKit<AsyncReady>,
+        kit: &crate::sdk::Nexus,
         path: &str,
         mode: &str,
     ) -> Result<(), CodeNexusError> {
@@ -714,7 +715,7 @@ diff --git a/added.rs b/added.rs
     #[test]
     fn core_path_not_a_directory_returns_error() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
+        let kit = nexus_for_db(db.to_str().unwrap());
         let err = detect_changes_core(&kit, "/nonexistent/path/xyz", "unstaged")
             .expect_err("nonexistent path should error");
         assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
@@ -724,7 +725,7 @@ diff --git a/added.rs b/added.rs
     fn core_invalid_mode_returns_error() {
         let tmp = TempDir::new().unwrap();
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
+        let kit = nexus_for_db(db.to_str().unwrap());
         let err = detect_changes_core(&kit, tmp.path().to_str().unwrap(), "bogus")
             .expect_err("invalid mode should error");
         assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
@@ -734,7 +735,7 @@ diff --git a/added.rs b/added.rs
     fn core_not_a_git_repo_returns_error() {
         let tmp = TempDir::new().unwrap();
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
+        let kit = nexus_for_db(db.to_str().unwrap());
         let result = detect_changes_core(&kit, tmp.path().to_str().unwrap(), "unstaged");
         let err = match result {
             Err(e) => e,
@@ -755,7 +756,7 @@ diff --git a/added.rs b/added.rs
             return;
         }
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
+        let kit = nexus_for_db(db.to_str().unwrap());
         let result = detect_changes_core(&kit, tmp.path().to_str().unwrap(), "unstaged");
         if result.is_ok() {
             // Empty diff → zero affected symbols.
@@ -807,8 +808,8 @@ diff --git a/added.rs b/added.rs
     #[test]
     fn find_symbols_in_ranges_returns_overlapping_symbol_low_risk() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().expect("require_storage");
 
         storage
             .save_nodes(
@@ -833,8 +834,8 @@ diff --git a/added.rs b/added.rs
     #[test]
     fn find_symbols_in_ranges_returns_medium_risk_with_1_to_3_incoming() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().expect("require_storage");
 
         storage
             .save_nodes(
@@ -866,8 +867,8 @@ diff --git a/added.rs b/added.rs
     #[test]
     fn find_symbols_in_ranges_returns_high_risk_with_4_plus_incoming() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().expect("require_storage");
 
         storage
             .save_nodes(
@@ -904,8 +905,8 @@ diff --git a/added.rs b/added.rs
     #[test]
     fn find_symbols_in_ranges_skips_non_overlapping_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().expect("require_storage");
 
         storage
             .save_nodes(
@@ -930,8 +931,8 @@ diff --git a/added.rs b/added.rs
     #[test]
     fn find_symbols_in_ranges_empty_ranges_returns_empty() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().expect("require_storage");
         storage
             .save_nodes(
                 &[sample_function("f_e", "/repo/src/e.rs", 1, 5)],
@@ -1020,8 +1021,8 @@ diff --git a/bar.rs b/bar.rs
     #[test]
     fn find_symbols_in_ranges_no_matching_symbols_returns_empty() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().expect("require_storage");
         let affected = find_symbols_in_ranges(
             &*storage,
             "src/nonexistent.rs",
@@ -1076,8 +1077,8 @@ diff --git a/bar.rs b/bar.rs
         std::fs::write(&file, "fn foo() {\n    // new\n    // added\n}\n").unwrap();
 
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageModule>().unwrap();
+        let kit = nexus_for_db(db.to_str().unwrap());
+        let storage = kit.storage().unwrap();
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'foo', qualifiedName: 'demo.foo', filePath: 'src/foo.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
 
         let result = detect_changes_core(&kit, tmp.path().to_str().unwrap(), "unstaged");
@@ -1159,7 +1160,7 @@ diff --git a/bar.rs b/bar.rs
         let _ = git(&["add", "."]);
 
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
+        let kit = nexus_for_db(db.to_str().unwrap());
         let result = detect_changes_core(&kit, tmp.path().to_str().unwrap(), "staged");
         assert!(
             result.is_ok(),
@@ -1211,7 +1212,7 @@ diff --git a/bar.rs b/bar.rs
         let _ = git(&["add", "."]);
 
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
+        let kit = nexus_for_db(db.to_str().unwrap());
         let result = detect_changes_core(&kit, tmp.path().to_str().unwrap(), "head");
         assert!(
             result.is_ok(),

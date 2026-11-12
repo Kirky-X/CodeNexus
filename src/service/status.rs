@@ -7,14 +7,16 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-#[cfg(any(feature = "cli", test))]
+#[cfg(test)]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
+#[cfg(any(feature = "cli", test))]
+use crate::sdk::Nexus;
 #[cfg(any(feature = "cli", test))]
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(feature = "cli")]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 #[cfg(any(feature = "cli", feature = "analysis", test))]
 use crate::storage::StorageConfig;
 use crate::storage::{is_table_missing_error, ProjectRecord};
@@ -190,15 +192,15 @@ pub(crate) fn resolve_project_root(root_path: &str, db_path: &Path) -> PathBuf {
 /// [`QualityChecker::check_project_isolation`] keeps strict semantics for
 /// violation detection.
 #[cfg(any(feature = "cli", test))]
-pub fn run_status(kit: &AsyncKit<AsyncReady>) -> Result<StatusOutput, CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
-    let db_path = kit.config::<StorageConfig>()?.db_path.clone();
+pub fn run_status(nexus: &Nexus) -> Result<StatusOutput, CodeNexusError> {
+    let storage = nexus.storage()?;
+    let db_path = nexus.raw_kit().config::<StorageConfig>()?.db_path.clone();
     let projects = match storage.list_projects() {
         Ok(projects) => projects,
         Err(err) if is_table_missing_error(&err) => return Ok(StatusOutput::default()),
         Err(err) => return Err(err.into()),
     };
-    let aggregate = kit.health_aggregate();
+    let aggregate = nexus.raw_kit().health_aggregate();
     let output = StatusOutput {
         projects: projects
             .into_iter()
@@ -230,8 +232,8 @@ pub fn run_status(kit: &AsyncKit<AsyncReady>) -> Result<StatusOutput, CodeNexusE
     cli = true
 )]
 async fn status() -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = run_status(&kit).map_err(|e| to_api_error(e, "status_error"))?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    let output = run_status(&nexus).map_err(|e| to_api_error(e, "status_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
@@ -259,6 +261,10 @@ mod tests {
             .unwrap()
             .block_on(build_kit(&config))
             .expect("build_kit")
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> Nexus {
+        Nexus::from_kit(build_kit_for_db(db))
     }
 
     /// Test-only module whose capability is never registered, so trait-kit's
@@ -308,8 +314,8 @@ mod tests {
     #[test]
     fn run_status_returns_empty_on_fresh_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let output = run_status(&kit).expect("run should succeed");
+        let nexus = nexus_for_db(&db);
+        let output = run_status(&nexus).expect("run should succeed");
         assert!(output.projects.is_empty());
     }
 
@@ -319,12 +325,12 @@ mod tests {
         // The service layer converts "table missing" errors into empty
         // StatusOutput so CLI exits 0 with `{"projects":[]}`.
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let nexus = nexus_for_db(&db);
+        let storage = nexus.storage().expect("storage");
         storage
             .execute("DROP TABLE Project;")
             .expect("drop project table");
-        let output = run_status(&kit).expect("run should succeed with empty output");
+        let output = run_status(&nexus).expect("run should succeed with empty output");
         assert!(
             output.projects.is_empty(),
             "dropped Project table should yield empty output"
@@ -334,12 +340,12 @@ mod tests {
     #[test]
     fn run_status_returns_project_with_staleness() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let nexus = nexus_for_db(&db);
+        let storage = nexus.storage().expect("storage");
         storage
             .execute("CREATE (:Project {id: 'p1', name: 'demo', rootPath: '/nonexistent', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc123'});")
             .expect("create project");
-        let output = run_status(&kit).expect("run should succeed");
+        let output = run_status(&nexus).expect("run should succeed");
         assert_eq!(output.projects.len(), 1);
         let p = &output.projects[0];
         assert_eq!(p.id, "p1");
@@ -356,8 +362,8 @@ mod tests {
     #[test]
     fn run_status_reports_health_from_production_kit() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let output = run_status(&kit).expect("run should succeed");
+        let nexus = nexus_for_db(&db);
+        let output = run_status(&nexus).expect("run should succeed");
         // 生产 bootstrap 注册 storage（cache 开启时含 cache）checker：聚合必须
         // 存在、storage 健康；平面视图只列非健康模块（此处为空）。
         assert!(output.kit_health.is_empty());
@@ -385,8 +391,8 @@ mod tests {
     #[test]
     fn run_status_reports_worst_of_health_with_detail() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_with_checkers(&db);
-        let output = run_status(&kit).expect("run should succeed");
+        let nexus = Nexus::from_kit(build_kit_with_checkers(&db));
+        let output = run_status(&nexus).expect("run should succeed");
 
         // Flat view keeps only the non-healthy module.
         assert_eq!(output.kit_health, vec!["missing_probe=unhealthy"]);
@@ -644,8 +650,8 @@ mod tests {
         std::fs::create_dir_all(&db_dir).unwrap();
         let db_path = db_dir.join("test.lbug");
 
-        let kit = build_kit_for_db(&db_path);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let nexus = nexus_for_db(&db_path);
+        let storage = nexus.storage().expect("storage");
         // rootPath deliberately set to "." (legacy). lastCommit = current HEAD
         // so stale should be false once the fallback resolves the root.
         storage
@@ -654,7 +660,7 @@ mod tests {
             ))
             .expect("create project");
 
-        let output = run_status(&kit).expect("run_status");
+        let output = run_status(&nexus).expect("run_status");
         assert_eq!(output.projects.len(), 1, "exactly one project");
         let p = &output.projects[0];
         assert_eq!(

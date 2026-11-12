@@ -6,14 +6,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-#[cfg(any(feature = "cli", feature = "mcp", test))]
-use crate::kit::{AsyncKit, AsyncReady, TraceModule};
+#[cfg(test)]
+use crate::kit::{AsyncKit, AsyncReady};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::error::CodeNexusError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::trace::MAX_SUBGRAPH_NODES;
 use crate::trace::{
@@ -172,7 +172,7 @@ fn extend_paths_dedup(existing: &mut Vec<TracePath>, extra: Vec<TracePath>) {
 /// call paths.
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 pub fn run_trace(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     symbol: &str,
     trace_type: &str,
     depth: u32,
@@ -185,7 +185,7 @@ pub fn run_trace(
             "invalid trace_type: {trace_type} (expected calls|dataflow|all)"
         ))
     })?;
-    let trace_engine = kit.require::<TraceModule>()?;
+    let trace_engine = nexus.trace()?;
     let mut result = match trace_engine.trace(symbol, tt, depth as usize) {
         Ok(result) => result,
         // Unknown symbol → empty result, not an error (TRC-02: the trace of a
@@ -248,9 +248,9 @@ async fn trace(
     detect_cycles: bool,
     cross_service: bool,
 ) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let result = run_trace(
-        &kit,
+        &nexus,
         &symbol,
         &trace_type,
         depth,
@@ -281,9 +281,9 @@ async fn trace_mcp(
     detect_cycles: bool,
     cross_service: bool,
 ) -> Result<TraceOutput, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     run_trace(
-        &kit,
+        &nexus,
         &symbol,
         &trace_type,
         depth,
@@ -307,6 +307,10 @@ mod tests {
         (dir, path)
     }
 
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
+    }
+
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(db.to_path_buf());
         tokio::runtime::Runtime::new()
@@ -321,7 +325,7 @@ mod tests {
     #[test]
     fn run_trace_returns_empty_output_for_unknown_symbol() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let output = run_trace(&kit, "demo.foo", "calls", 3, "", false, false)
             .expect("unknown symbol must not error");
         assert_eq!(output.symbol, "demo.foo");
@@ -332,7 +336,7 @@ mod tests {
     #[test]
     fn run_trace_returns_invalid_input_for_bad_trace_type() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err = run_trace(&kit, "demo.foo", "bogus", 3, "", false, false)
             .expect_err("invalid trace_type should error");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
@@ -468,8 +472,8 @@ mod tests {
     #[test]
     fn run_trace_succeeds_for_known_symbol_with_calls() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'callee', qualifiedName: 'demo.callee', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create callee");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: 'direct call', startLine: 2, project: 'demo'});").expect("create edge");
@@ -482,8 +486,8 @@ mod tests {
     #[test]
     fn run_trace_succeeds_for_dataflow_trace_type() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_src', project: 'demo', name: 'src', qualifiedName: 'demo.src', filePath: '/src/s.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create src");
         storage.execute("CREATE (:Function {id: 'f_dst', project: 'demo', name: 'dst', qualifiedName: 'demo.dst', filePath: '/src/d.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create dst");
         storage.execute("CREATE (:CodeRelation {id: 'e_df', source: 'f_src', target: 'f_dst', type: 'DATAFLOWS', confidence: 1.0, confidenceTier: 'High', reason: 'assignment', startLine: 2, project: 'demo'});").expect("create dataflow edge");
@@ -496,8 +500,8 @@ mod tests {
     #[test]
     fn run_trace_succeeds_for_all_trace_type() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_root', project: 'demo', name: 'root', qualifiedName: 'demo.root', filePath: '/src/r.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create root");
 
         let output = run_trace(&kit, "demo.root", "all", 2, "", false, false)
@@ -539,8 +543,8 @@ mod tests {
     #[test]
     fn run_trace_with_detect_cycles_finds_cycle() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         // A→B→C→A (cycle)
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
@@ -561,8 +565,8 @@ mod tests {
     #[test]
     fn run_trace_with_detect_cycles_no_cycle_returns_empty() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         // A→B (no cycle)
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
@@ -580,8 +584,8 @@ mod tests {
     #[test]
     fn run_trace_with_cross_service_finds_http_calls() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'api_handler', qualifiedName: 'demo.api_handler', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create handler");
         storage.execute("CREATE (:CodeRelation {id: 'e_http', source: 'f_a', target: 'f_b', type: 'HTTP_CALLS', confidence: 0.9, confidenceTier: 'High', reason: 'http request', startLine: 2, project: 'demo'});").expect("create http_calls edge");
@@ -607,8 +611,8 @@ mod tests {
     #[test]
     fn run_trace_with_cross_service_no_http_calls_returns_base() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'callee', qualifiedName: 'demo.callee', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create callee");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create calls edge");
@@ -627,8 +631,8 @@ mod tests {
     #[test]
     fn run_trace_with_path_filter_filters_paths() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'callee', qualifiedName: 'demo.callee', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create callee");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
@@ -653,8 +657,8 @@ mod tests {
     #[test]
     fn run_trace_with_path_filter_glob_keeps_matching() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'callee', qualifiedName: 'demo.callee', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create callee");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
@@ -671,8 +675,8 @@ mod tests {
     #[test]
     fn run_trace_combined_detect_cycles_and_cross_service() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         // A→B→A (cycle) + A -HTTP_CALLS-> C
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
@@ -867,8 +871,8 @@ mod tests {
     #[test]
     fn run_trace_dataflow_with_detect_cycles_succeeds() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'DATAFLOWS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create dataflow edge");
@@ -881,8 +885,8 @@ mod tests {
     #[test]
     fn run_trace_all_type_with_cross_service_succeeds() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:CodeRelation {id: 'e_http', source: 'f_a', target: 'f_b', type: 'HTTP_CALLS', confidence: 0.9, confidenceTier: 'High', reason: 'http', startLine: 2, project: 'demo'});").expect("create http edge");
@@ -895,8 +899,8 @@ mod tests {
     #[test]
     fn run_trace_all_type_with_all_features_combined() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create calls edge");
@@ -912,8 +916,8 @@ mod tests {
     #[test]
     fn run_trace_with_path_filter_and_cross_service_combined() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:CodeRelation {id: 'e_http', source: 'f_a', target: 'f_b', type: 'HTTP_CALLS', confidence: 0.9, confidenceTier: 'High', reason: 'http', startLine: 2, project: 'demo'});").expect("create http edge");
@@ -926,8 +930,8 @@ mod tests {
     #[test]
     fn run_trace_cross_service_missing_start_node_in_graph() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         // Create a node with a different name than the query symbol
         storage.execute("CREATE (:Function {id: 'f_x', project: 'demo', name: 'x', qualifiedName: 'demo.x', filePath: '/src/x.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create x");
 

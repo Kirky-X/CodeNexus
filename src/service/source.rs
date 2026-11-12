@@ -15,7 +15,8 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use crate::index::hash::{compute_content_hash, MAX_FILE_SIZE};
-use crate::kit::{AsyncKit, AsyncReady, StorageModule};
+#[cfg(test)]
+use crate::kit::{AsyncKit, AsyncReady};
 use crate::model::node_label::NodeLabel;
 use crate::service::error::CodeNexusError;
 use crate::source_io::slice_lines;
@@ -24,7 +25,7 @@ use crate::storage::schema::{escape_cypher_string, escape_identifier, node_table
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::forge;
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -581,12 +582,12 @@ pub(crate) fn effective_range(
 ///
 /// 同步实现：storage 查询为同步 API（`run_search` 同款 house 形状）。
 pub fn run_read_symbol_source(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     key: SymbolKey,
     opts: &SourceOptions,
 ) -> Result<SymbolSource, SourceError> {
-    let storage = kit
-        .require::<StorageModule>()
+    let storage = nexus
+        .storage()
         .map_err(|e| SourceError::SourceUnavailable(e.to_string()))?;
     let row = resolve_symbol(&*storage, &key)?;
     // 校验链顺带完成唯一的整文件读取：切片复用其字节——单次调用至多一次
@@ -691,11 +692,11 @@ async fn source(
     end_line: u32,
     max_lines: u32,
 ) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let key = build_key_from_cli(&qualified_name, &id, &file, &name)
         .map_err(|e| to_api_error(e, "source_error"))?;
     let opts = cli_options(start_line, end_line, max_lines);
-    let result = run_read_symbol_source(&kit, key, &opts)
+    let result = run_read_symbol_source(&nexus, key, &opts)
         .map_err(|e| to_api_error(e.into(), "source_error"))?;
     let json = serde_json::to_string(&result)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "source_error"))?;
@@ -738,11 +739,11 @@ async fn source_mcp(
     end_line: u32,
     max_lines: u32,
 ) -> Result<SymbolSource, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let key = build_key_from_cli(&qualified_name, &id, &file, &name)
         .map_err(|e| to_api_error(e, "source_error"))?;
     let opts = cli_options(start_line, end_line, max_lines);
-    run_read_symbol_source(&kit, key, &opts).map_err(|e| to_api_error(e.into(), "source_error"))
+    run_read_symbol_source(&nexus, key, &opts).map_err(|e| to_api_error(e.into(), "source_error"))
 }
 
 #[cfg(test)]
@@ -861,6 +862,10 @@ mod tests {
             .expect("build_kit")
     }
 
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
+    }
+
     fn seed_project(storage: &dyn Storage, id: &str, name: &str) {
         storage
             .execute(&format!(
@@ -869,8 +874,8 @@ mod tests {
             .expect("create project");
     }
 
-    fn storage_of(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn Storage> {
-        kit.require::<StorageModule>().expect("storage module")
+    fn storage_of(kit: &crate::sdk::Nexus) -> std::sync::Arc<dyn Storage> {
+        kit.storage().expect("storage module")
     }
 
     #[test]
@@ -903,7 +908,7 @@ mod tests {
     #[test]
     fn resolve_by_qualified_name_hits_unique_function() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let storage = storage_of(&kit);
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 10, endLine: 20, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
@@ -921,7 +926,7 @@ mod tests {
     #[test]
     fn resolve_unknown_qualified_name_is_not_found() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let storage = storage_of(&kit);
         seed_project(&*storage, "demo", "demo");
 
@@ -936,7 +941,7 @@ mod tests {
     #[test]
     fn resolve_duplicate_qualified_name_reports_ambiguity() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let storage = storage_of(&kit);
         seed_project(&*storage, "demo", "demo");
         for id in ["f_dup_a", "f_dup_b"] {
@@ -954,7 +959,7 @@ mod tests {
     #[test]
     fn resolve_by_node_id_hits_unique_row() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let storage = storage_of(&kit);
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'uniq_id_1', project: 'demo', name: 'id_hit', qualifiedName: 'demo.id_hit', filePath: '/src/b.rs', startLine: 3, endLine: 9, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
@@ -969,7 +974,7 @@ mod tests {
     #[test]
     fn resolve_duplicate_node_id_across_tables_reports_ambiguity() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let storage = storage_of(&kit);
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'dup_id', project: 'demo', name: 'cross_a', qualifiedName: 'demo.cross_a', filePath: '/src/a.rs', startLine: 1, endLine: 4, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
@@ -989,7 +994,7 @@ mod tests {
     #[test]
     fn resolve_by_file_and_name_hits_unique_row() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let storage = storage_of(&kit);
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'fn_fp', project: 'demo', name: 'combo_fn', qualifiedName: 'demo.combo_fn', filePath: '/src/combo.rs', startLine: 2, endLine: 8, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
@@ -1009,7 +1014,7 @@ mod tests {
     #[test]
     fn resolve_by_file_and_name_multiple_hits_reports_ambiguity() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let storage = storage_of(&kit);
         seed_project(&*storage, "demo", "demo");
         for id in ["fn_c1", "fn_c2"] {
@@ -1034,12 +1039,12 @@ mod tests {
 
     /// 索引场景种子：真实临时目录 + 真实 BLAKE3 hash + File 行 + Function 行。
     /// `project_root` 允许指向不存在路径（测试 ① 根缺失分支）。
-    /// 返回 (kit, dir, 源文件绝对路径字符串)；storage 经 `storage_of(&kit)` 取。
+    /// 返回 (nexus, dir, 源文件绝对路径字符串)；storage 经 `storage_of(&nexus)` 取。
     fn seed_fresh_workspace_at(
         content: &str,
         line_count: u32,
         project_root_override: Option<&std::path::Path>,
-    ) -> (AsyncKit<AsyncReady>, TempDir, String) {
+    ) -> (crate::sdk::Nexus, TempDir, String) {
         let dir = TempDir::new().unwrap();
         let root = dir.path().canonicalize().unwrap();
         // house 语义：DB filePath 为项目根相对路径（discover::walker）
@@ -1049,8 +1054,8 @@ mod tests {
         let hash = compute_file_hash(&file_path).expect("hash");
         let db = dir.path().canonicalize().unwrap().join("db");
 
-        let kit = build_kit_for_db(&db);
-        let storage = storage_of(&kit);
+        let nexus = nexus_for_db(&db);
+        let storage = storage_of(&nexus);
         let root_str = project_root_override
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| root.to_string_lossy().to_string());
@@ -1067,13 +1072,13 @@ mod tests {
             "CREATE (:Function {{id: 'fn_1', project: 'demo', name: 'seed_fn', qualifiedName: 'demo.seed_fn', filePath: '{}', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''}});",
             file_path_str.replace('\'', "\\'")
         )).expect("create function");
-        (kit, dir, file_path_str)
+        (nexus, dir, file_path_str)
     }
 
     fn seed_fresh_workspace(
         content: &str,
         line_count: u32,
-    ) -> (AsyncKit<AsyncReady>, TempDir, String) {
+    ) -> (crate::sdk::Nexus, TempDir, String) {
         seed_fresh_workspace_at(content, line_count, None)
     }
 

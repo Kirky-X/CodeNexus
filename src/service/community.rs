@@ -8,7 +8,7 @@ use serde_json::Value;
 
 #[cfg(feature = "community")]
 use crate::analysis::community::{Community, CommunityDetector};
-#[cfg(all(feature = "community", any(feature = "cli", test)))]
+#[cfg(all(test, feature = "community"))]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "community", any(feature = "cli", test)))]
 use crate::service::error::CodeNexusError;
@@ -17,7 +17,7 @@ use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(all(feature = "community", any(feature = "cli", test)))]
 use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "cli", feature = "community"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -36,11 +36,11 @@ pub struct CommunityOutput {
 /// Runs community detection against an injected Kit (testable core).
 #[cfg(all(feature = "community", any(feature = "cli", test)))]
 pub fn run_community(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     project: &str,
     resolution: Option<f64>,
 ) -> Result<CommunityOutput, CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+    let storage = nexus.storage()?;
     let project_id = resolve_project_id(&*storage, project)?;
     let mut detector = CommunityDetector::new(&*storage, &project_id);
     if let Some(res) = resolution {
@@ -69,7 +69,7 @@ pub fn run_community(
     cli = true
 )]
 async fn community(project: String, resolution: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let res = if resolution.is_empty() {
         None
     } else {
@@ -86,7 +86,7 @@ async fn community(project: String, resolution: String) -> Result<(), ApiError> 
         )
     };
     let output =
-        run_community(&kit, &project, res).map_err(|e| to_api_error(e, "community_error"))?;
+        run_community(&nexus, &project, res).map_err(|e| to_api_error(e, "community_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
@@ -105,6 +105,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_community_testdb");
         (dir, path)
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
@@ -126,8 +130,8 @@ mod tests {
     #[test]
     fn run_community_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output = run_community(&kit, "demo", None).expect("run should succeed");
         assert_eq!(output.project, "demo");
@@ -137,8 +141,8 @@ mod tests {
     #[test]
     fn run_community_detects_communities_with_edges() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
@@ -152,8 +156,8 @@ mod tests {
     #[test]
     fn run_community_with_custom_resolution() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
@@ -166,8 +170,8 @@ mod tests {
     #[test]
     fn run_community_unknown_project_returns_empty() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'other', name: 'a', qualifiedName: 'other.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         let err = run_community(&kit, "demo", None).expect_err("unknown project should error");
         assert!(matches!(err, CodeNexusError::ProjectNotFound(_)));
@@ -197,8 +201,8 @@ mod tests {
     #[test]
     fn run_community_with_two_separate_clusters() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         // Cluster A: a1 → a2 → a3
         storage.execute("CREATE (:Function {id: 'f_a1', project: 'demo', name: 'a1', qualifiedName: 'demo.a1', filePath: '/src/a1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a1");
@@ -221,8 +225,8 @@ mod tests {
     #[test]
     fn run_community_with_low_resolution() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
@@ -235,8 +239,8 @@ mod tests {
     #[test]
     fn run_community_serializes_output_with_communities() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");

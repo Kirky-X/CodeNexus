@@ -3,7 +3,6 @@
 
 use serde::Serialize;
 
-use crate::kit::{AsyncKit, AsyncReady, StorageModule, TraceModule};
 use crate::model::Language;
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
@@ -12,7 +11,7 @@ use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 // import 不得挂 cli 门——否则无 cli 组合的 lib test 编译失败（E0425）。
 use crate::service::project::resolve_project_id;
 #[cfg(feature = "cli")]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 use crate::trace::taint_rules::{match_node, BUILTIN_RULES, RULES_VERSION};
 use crate::trace::TaintPathTracer;
 
@@ -65,10 +64,10 @@ fn finding(source: &str, sink: &str, path: &crate::trace::TracePath) -> TaintFin
 /// Queries function-like labels for each language that has rules (or only
 /// `filter` when given). Returns `(node_id, name, qualified_name, language)`.
 fn candidate_nodes(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     filter: Option<Language>,
 ) -> Result<Vec<(String, String, String, Language)>, CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+    let storage = nexus.storage()?;
     let languages: Vec<Language> = match filter {
         Some(lang) => vec![lang],
         None => BUILTIN_RULES.iter().map(|(lang, _)| *lang).collect(),
@@ -112,7 +111,7 @@ fn candidate_nodes(
 /// Core logic — audits taint paths against an injected Kit (testable core).
 #[cfg_attr(not(feature = "cli"), allow(dead_code))]
 pub fn run_taint(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     source: &str,
     sink: &str,
     language_filter: &str,
@@ -121,7 +120,7 @@ pub fn run_taint(
     project: &str,
 ) -> Result<TaintAuditOutput, CodeNexusError> {
     if !project.trim().is_empty() {
-        let storage = kit.require::<StorageModule>()?;
+        let storage = nexus.storage()?;
         resolve_project_id(&*storage, project)?;
     }
 
@@ -132,7 +131,7 @@ pub fn run_taint(
                 "manual taint mode requires both --source and --sink".to_string(),
             ));
         }
-        let trace_engine = kit.require::<TraceModule>()?;
+        let trace_engine = nexus.trace()?;
         let (graph, _truncated) =
             trace_engine.load_graph(source, depth, crate::trace::MAX_SUBGRAPH_NODES)?;
         let src_id = find_start_node_id(&graph, source).ok_or_else(|| {
@@ -162,9 +161,9 @@ pub fn run_taint(
             CodeNexusError::InvalidInput(format!("unknown language filter: {language_filter}"))
         })?)
     };
-    let candidates = candidate_nodes(kit, filter)?;
+    let candidates = candidate_nodes(nexus, filter)?;
 
-    let trace_engine = kit.require::<TraceModule>()?;
+    let trace_engine = nexus.trace()?;
     let mut sources_found = 0usize;
     let mut sinks_found = 0usize;
     let mut pairs_scanned = 0usize;
@@ -256,9 +255,9 @@ async fn taint(
     depth: String,
     project: String,
 ) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let output = run_taint(
-        &kit,
+        &nexus,
         &source,
         &sink,
         &language,
@@ -284,10 +283,10 @@ fn parse_count(name: &str, raw: &str) -> Result<usize, CodeNexusError> {
 #[cfg(any(feature = "cli", feature = "mcp"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
+    use crate::kit::{build_kit, KitBootstrapConfig};
     use tempfile::TempDir;
 
-    fn fresh_kit() -> (TempDir, AsyncKit<AsyncReady>) {
+    fn fresh_kit() -> (TempDir, crate::sdk::Nexus) {
         let dir = TempDir::new().unwrap();
         let db = dir.path().join("taint_db");
         let config = KitBootstrapConfig::new(db);
@@ -295,11 +294,11 @@ mod tests {
             .unwrap()
             .block_on(build_kit(&config))
             .unwrap();
-        (dir, kit)
+        (dir, crate::sdk::Nexus::from_kit(kit))
     }
 
-    fn seed_taint_flow(kit: &AsyncKit<AsyncReady>) {
-        let storage = kit.require::<StorageModule>().unwrap();
+    fn seed_taint_flow(kit: &crate::sdk::Nexus) {
+        let storage = kit.storage().unwrap();
         // C-language flow: getenv → parse → system. Language lives on File
         // nodes (function tables have no language column), so seed File rows
         // matching each function's filePath.

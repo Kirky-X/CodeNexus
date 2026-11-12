@@ -65,7 +65,7 @@ pub struct SchemaInitReport {
 /// already excludes "locked"); here we positively detect it so the upper layer
 /// can surface `StorageError::DatabaseLocked` (exit 2) instead of hiding the
 /// failure behind a generic `kit_not_initialized` (exit 1).
-fn is_db_locked(e: &StorageError) -> bool {
+pub(crate) fn is_db_locked(e: &StorageError) -> bool {
     let msg = e.to_string().to_lowercase();
     msg.contains("could not set lock")
         || msg.contains("lock is held")

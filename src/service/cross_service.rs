@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::analysis::cross_service::{
     CrossServiceDetector, CrossServiceLink, CrossServiceLinker, CrossServiceMatch, ServiceProtocol,
 };
-#[cfg(all(feature = "cross-service", any(feature = "cli", test)))]
+#[cfg(all(test, feature = "cross-service"))]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cross-service", any(feature = "cli", test)))]
 use crate::service::error::CodeNexusError;
@@ -18,7 +18,7 @@ use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(all(feature = "cross-service", any(feature = "cli", test)))]
 use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "cli", feature = "cross-service"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 #[cfg(feature = "cross-service")]
 use std::str::FromStr;
 
@@ -48,11 +48,11 @@ pub struct CrossServiceOutput {
 /// route pattern matching with edge persistence) for backward compatibility.
 #[cfg(all(feature = "cross-service", any(feature = "cli", test)))]
 pub fn run_cross_service(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     project: &str,
     protocol: &str,
 ) -> Result<CrossServiceOutput, CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+    let storage = nexus.storage()?;
     let project_id = resolve_project_id(&*storage, project)?;
     let linker = CrossServiceLinker::new(&*storage, &project_id);
     let links = linker.link()?;
@@ -82,8 +82,8 @@ pub fn run_cross_service(
     cli = true
 )]
 async fn cross_service(project: String, protocol: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = run_cross_service(&kit, &project, &protocol)
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    let output = run_cross_service(&nexus, &project, &protocol)
         .map_err(|e| to_api_error(e, "cross_service_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
@@ -105,6 +105,10 @@ mod tests {
         (dir, path)
     }
 
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
+    }
+
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(db.to_path_buf());
         tokio::runtime::Runtime::new()
@@ -124,8 +128,8 @@ mod tests {
     #[test]
     fn run_cross_service_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output = run_cross_service(&kit, "demo", "").expect("run should succeed");
         assert_eq!(output.project, "demo");
@@ -136,8 +140,8 @@ mod tests {
     #[test]
     fn run_cross_service_returns_links_when_patterns_match() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
@@ -148,8 +152,8 @@ mod tests {
     #[test]
     fn run_cross_service_unknown_project_returns_empty_links() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         storage.execute("CREATE (:Route {id: 'r1', project: 'other', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         let err = run_cross_service(&kit, "demo", "").expect_err("unknown project should error");
         assert!(matches!(err, CodeNexusError::ProjectNotFound(_)));
@@ -182,8 +186,8 @@ mod tests {
     #[test]
     fn run_cross_service_with_empty_protocol_returns_all_matches() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output = run_cross_service(&kit, "demo", "").expect("run should succeed");
         // Empty DB → no matches, but field should exist
@@ -193,8 +197,8 @@ mod tests {
     #[test]
     fn run_cross_service_with_protocol_filter_on_empty_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output = run_cross_service(&kit, "demo", "grpc").expect("run should succeed");
         assert!(
@@ -206,8 +210,8 @@ mod tests {
     #[test]
     fn run_cross_service_with_invalid_protocol_returns_all_matches() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "demo", "demo");
         let output =
             run_cross_service(&kit, "demo", "invalid_protocol").expect("run should succeed");
@@ -220,8 +224,8 @@ mod tests {
     #[test]
     fn run_cross_service_with_http_protocol_filters_matches() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
@@ -240,8 +244,8 @@ mod tests {
     #[test]
     fn run_cross_service_with_grpc_protocol_filters_matches() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
@@ -260,8 +264,8 @@ mod tests {
     #[test]
     fn run_cross_service_no_protocol_returns_all_match_types() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");

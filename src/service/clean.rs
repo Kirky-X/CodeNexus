@@ -5,7 +5,7 @@
 
 use serde::Serialize;
 
-#[cfg(any(feature = "cli", test))]
+#[cfg(test)]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(any(feature = "cli", test))]
 use crate::service::error::CodeNexusError;
@@ -14,7 +14,7 @@ use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(any(feature = "cli", test))]
 use crate::service::project::resolve_project_id;
 #[cfg(feature = "cli")]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -31,8 +31,8 @@ pub struct CleanOutput {
 
 /// Runs clean against an injected Kit (testable core).
 #[cfg(any(feature = "cli", test))]
-pub fn run_clean(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<CleanOutput, CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+pub fn run_clean(nexus: &crate::sdk::Nexus, project: &str) -> Result<CleanOutput, CodeNexusError> {
+    let storage = nexus.storage()?;
     let project_id = resolve_project_id(&*storage, project)?;
     storage.delete_project(&project_id)?;
     Ok(CleanOutput {
@@ -57,8 +57,8 @@ async fn clean(project: String, rebuild: bool) -> Result<(), ApiError> {
     // path. The parameter must still be declared here so the CLI registers
     // the flag.
     let _ = rebuild;
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = run_clean(&kit, &project).map_err(|e| to_api_error(e, "clean_error"))?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    let output = run_clean(&nexus, &project).map_err(|e| to_api_error(e, "clean_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
@@ -77,6 +77,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_clean_testdb");
         (dir, path)
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
@@ -98,8 +102,8 @@ mod tests {
     #[test]
     fn run_clean_by_name_succeeds() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "p1", "demo");
         let output = run_clean(&kit, "demo").expect("run should succeed");
         assert_eq!(output.project, "demo");
@@ -111,8 +115,8 @@ mod tests {
     #[test]
     fn run_clean_by_id_succeeds() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "p1", "demo");
         let output = run_clean(&kit, "p1").expect("run should succeed");
         assert_eq!(output.project, "p1");
@@ -124,7 +128,7 @@ mod tests {
     #[test]
     fn run_clean_unknown_project_returns_error() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err = run_clean(&kit, "nonexistent").expect_err("unknown project should error");
         assert!(matches!(err, CodeNexusError::ProjectNotFound(_)));
     }
@@ -132,8 +136,8 @@ mod tests {
     #[test]
     fn run_clean_name_takes_precedence_over_id() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let kit = nexus_for_db(&db);
+        let storage = kit.storage().expect("storage");
         seed_project(&*storage, "p1", "p2");
         seed_project(&*storage, "p2", "other");
         let output = run_clean(&kit, "p2").expect("run should succeed");

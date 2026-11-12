@@ -7,17 +7,18 @@
 //! typing from real layer facts, cycle/cross-service edge variants, and the
 //! showcase evidence gate. `arch_diff` coverage lives in
 //! `service::arch_diff` unit tests (same core pipeline).
-use codenexus::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
+use codenexus::kit::KitBootstrapConfig;
+use codenexus::sdk::Nexus;
 use codenexus::service::diagram::run_diagram;
 use codenexus::service::error::CodeNexusError;
 use codenexus::storage::capability::Storage;
 
-fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
+fn nexus_for_db(db: &std::path::Path) -> Nexus {
     let config = KitBootstrapConfig::new(db.to_path_buf());
     tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(build_kit(&config))
-        .expect("build_kit")
+        .block_on(Nexus::open(config))
+        .expect("Nexus::open")
 }
 
 /// Seeds: src/api (controller handling a route), src/svc (called via fetch
@@ -38,9 +39,9 @@ fn seed_rich_project(storage: &dyn Storage) {
 fn diagram_int_renders_variants_and_types_from_graph_facts() {
     let dir = tempfile::TempDir::new().unwrap();
     let db = dir.path().join("it.db");
-    let kit = build_kit_for_db(&db);
+    let kit = nexus_for_db(&db);
     {
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let storage = kit.storage().expect("storage");
         seed_rich_project(&*storage);
     }
     let target = dir.path().join("arch.html");
@@ -85,9 +86,9 @@ fn diagram_int_renders_variants_and_types_from_graph_facts() {
 fn diagram_int_showcase_blocks_on_invalid_evidence() {
     let dir = tempfile::TempDir::new().unwrap();
     let db = dir.path().join("it.db");
-    let kit = build_kit_for_db(&db);
+    let kit = nexus_for_db(&db);
     {
-        let storage = kit.require::<StorageModule>().expect("storage");
+        let storage = kit.storage().expect("storage");
         seed_rich_project(&*storage);
     }
     let target = dir.path().join("arch.html");

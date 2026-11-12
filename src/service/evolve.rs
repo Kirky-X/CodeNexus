@@ -7,6 +7,7 @@ use std::process::Command;
 use serde::Serialize;
 
 use crate::analysis::architecture::ArchitectureAnalyzer;
+#[cfg(all(test, feature = "cli"))]
 use crate::kit::{AsyncKit, AsyncReady};
 use crate::service::error::CodeNexusError;
 // run_evolve（无 cli 门控的可测试核心）无条件使用 index_core，此 import
@@ -15,7 +16,7 @@ use crate::service::error::CodeNexusError;
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 use crate::service::index::index_core;
 #[cfg(feature = "cli")]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -155,7 +156,7 @@ fn remove_worktree(repo: &Path, dir: &Path) {
 
 /// Core logic — builds the evolution timeline (testable core).
 pub fn run_evolve(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     path: &str,
     max_commits: usize,
     output_dir: &str,
@@ -170,7 +171,7 @@ pub fn run_evolve(
     }
     let commits = enumerate_commits(repo, max_commits)?;
 
-    let storage_config = kit.config::<crate::storage::StorageConfig>()?;
+    let storage_config = nexus.raw_kit().config::<crate::storage::StorageConfig>()?;
     let db_path = storage_config.db_path.clone();
 
     let base_project = if project.trim().is_empty() {
@@ -191,7 +192,7 @@ pub fn run_evolve(
         let project_name = format!("{base_project}@{sha7}");
         let started = std::time::Instant::now();
         let index_result = index_core(
-            kit,
+            nexus,
             &db_path,
             worktree.path().to_str().unwrap_or_default(),
             &project_name,
@@ -208,8 +209,11 @@ pub fn run_evolve(
 
         // Metrics come from a FRESH connection: the indexer committed through
         // its own short-lived connection, and a long-lived reader (the kit's)
-        // would not observe the new data.
-        let fresh_repo = crate::storage::Repository::open(&db_path)?;
+        // would not observe the new data. Writable mode (not read-only):
+        // read-only opens cannot replay WAL the index run may have left
+        // behind, and would read stale rows here.
+        let fresh_repo =
+            crate::storage::open::open_fresh(&db_path, crate::storage::open::OpenMode::ReadWrite)?;
         let analyzer = ArchitectureAnalyzer::new(&fresh_repo);
         let overview = analyzer
             .overview(&index_result.project_id)
@@ -319,14 +323,14 @@ async fn evolve(
     max_commits: String,
     project: String,
 ) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let max = max_commits.trim().parse::<usize>().map_err(|_| {
         to_api_error(
             CodeNexusError::InvalidInput(format!("invalid --max_commits: {max_commits}")),
             "evolve_error",
         )
     })?;
-    let output = run_evolve(&kit, &path, max, &output, &project)
+    let output = run_evolve(&nexus, &path, max, &output, &project)
         .map_err(|e| to_api_error(e, "evolve_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
@@ -340,6 +344,10 @@ mod tests {
     use super::*;
     use crate::kit::{build_kit, KitBootstrapConfig};
     use tempfile::TempDir;
+
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
+    }
 
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(db.to_path_buf());
@@ -422,7 +430,7 @@ mod tests {
     fn evolve_timeline_covers_all_commits_and_writes_artifacts() {
         let (repo_dir, _shas) = setup_repo(2);
         let db = TempDir::new().unwrap();
-        let kit = build_kit_for_db(&db.path().join("evolve_db"));
+        let kit = nexus_for_db(&db.path().join("evolve_db"));
         let out_dir = TempDir::new().unwrap();
 
         let output = run_evolve(
@@ -479,7 +487,7 @@ mod tests {
         git(&["status"]);
 
         let db = TempDir::new().unwrap();
-        let kit = build_kit_for_db(&db.path().join("evolve_db2"));
+        let kit = nexus_for_db(&db.path().join("evolve_db2"));
         let out_dir = TempDir::new().unwrap();
         // Indexing a worktree without source files still succeeds (0 files);
         // the cleanup invariant is what we assert on success paths too.

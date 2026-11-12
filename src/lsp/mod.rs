@@ -52,7 +52,10 @@ pub use gopls::GoplsClient;
 pub use jdtls::JdtlsClient;
 pub use pyright::PyrightClient;
 pub use references_cache::{CacheKey, ReferencesCache};
-pub use registry::{DefaultLspRegistry, LspRegistry, LspRegistryModule, MAX_LSP_PROVIDERS};
+pub use registry::{
+    DefaultLspRegistry, LspProviderEntry, LspRegistry, LspRegistryError, LspRegistryModule,
+    MAX_LSP_PROVIDERS,
+};
 pub use server_spec::{LspServerSpec, ServerClient};
 pub use types::map_lsp_symbol_kind;
 pub use typescript_ls::TypeScriptLanguageClient;

@@ -11,8 +11,8 @@ use serde::Serialize;
 
 #[cfg(feature = "diagram")]
 use crate::analysis::architecture::{ArchitectureAnalyzer, ArchitectureOverview};
-#[cfg(feature = "diagram")]
-use crate::kit::{AsyncKit, AsyncReady, StorageModule};
+#[cfg(all(test, feature = "cli", feature = "diagram"))]
+use crate::kit::{AsyncKit, AsyncReady};
 #[cfg(feature = "diagram")]
 use crate::service::error::CodeNexusError;
 #[cfg(all(feature = "diagram", any(feature = "cli", feature = "mcp")))]
@@ -20,7 +20,7 @@ use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(feature = "diagram")]
 use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "diagram", any(feature = "cli", feature = "mcp")))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(feature = "diagram")]
 use crate::diagram::{render_delta, DeltaReceipt, DiagramError, QualityProfile};
@@ -55,7 +55,7 @@ pub struct ArchDiffOutput {
 #[cfg(feature = "diagram")]
 #[allow(clippy::too_many_arguments)]
 pub fn run_arch_diff(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     base_project: &str,
     head_project: &str,
     output_path: &str,
@@ -73,7 +73,7 @@ pub fn run_arch_diff(
     }
     let _ = profile; // gates run at standard inside render_delta; kept for CLI parity
 
-    let storage = kit.require::<StorageModule>()?;
+    let storage = nexus.storage()?;
     let base_doc = project_document(&*storage, base_project, title)?;
     let head_doc = project_document(&*storage, head_project, title)?;
 
@@ -239,9 +239,9 @@ async fn arch_diff(
     viewer_data: String,
     viewer_url: String,
 ) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let out = run_arch_diff(
-        &kit,
+        &nexus,
         &base_project,
         &head_project,
         &output,
@@ -274,9 +274,9 @@ async fn arch_diff_mcp(
     viewer_data: String,
     viewer_url: String,
 ) -> Result<DeltaReceipt, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     run_arch_diff(
-        &kit,
+        &nexus,
         &base_project,
         &head_project,
         &output,
@@ -292,13 +292,17 @@ async fn arch_diff_mcp(
 #[cfg(all(test, feature = "cli", feature = "diagram"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
+    use crate::kit::{build_kit, KitBootstrapConfig};
     use tempfile::TempDir;
 
     fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_archdiff_testdb");
         (dir, path)
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
@@ -327,9 +331,9 @@ mod tests {
     #[test]
     fn run_arch_diff_classifies_added_entities_and_writes_pair() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         {
-            let storage = kit.require::<StorageModule>().expect("storage");
+            let storage = kit.storage().expect("storage");
             seed_base(&*storage);
             seed_head(&*storage);
         }
@@ -376,9 +380,9 @@ mod tests {
     #[test]
     fn run_arch_diff_viewer_data_snapshot_carries_delta_changes() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         {
-            let storage = kit.require::<StorageModule>().expect("storage");
+            let storage = kit.storage().expect("storage");
             seed_base(&*storage);
             seed_head(&*storage);
         }
@@ -420,9 +424,9 @@ mod tests {
     #[test]
     fn run_arch_diff_identical_projects_yield_empty_report() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         {
-            let storage = kit.require::<StorageModule>().expect("storage");
+            let storage = kit.storage().expect("storage");
             seed_base(&*storage);
         }
         let out_dir = TempDir::new().unwrap();
@@ -444,9 +448,9 @@ mod tests {
     #[test]
     fn run_arch_diff_missing_base_project_errors() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         {
-            let storage = kit.require::<StorageModule>().expect("storage");
+            let storage = kit.storage().expect("storage");
             seed_base(&*storage);
         }
         let out_dir = TempDir::new().unwrap();

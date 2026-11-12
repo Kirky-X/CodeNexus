@@ -9,14 +9,13 @@ use std::io::BufRead;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(feature = "cli")]
 use crate::service::error::kit_not_initialized;
 #[cfg(feature = "cli")]
 use crate::service::error::to_api_error;
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -52,7 +51,7 @@ struct HookPayload {
 }
 
 /// Builds the hook decision from the raw stdin payload.
-fn build_decision(kit: &AsyncKit<AsyncReady>, raw: &str) -> HookDecision {
+fn build_decision(nexus: &crate::sdk::Nexus, raw: &str) -> HookDecision {
     let payload: HookPayload = match serde_json::from_str(raw) {
         Ok(p) => p,
         Err(e) => {
@@ -92,7 +91,7 @@ fn build_decision(kit: &AsyncKit<AsyncReady>, raw: &str) -> HookDecision {
 
     // PostToolUse after a rename → emit a summary.
     if payload.phase == "PostToolUse" && payload.tool_name.contains("rename") {
-        if let Ok(summary) = summarize_rename(kit) {
+        if let Ok(summary) = summarize_rename(nexus) {
             return HookDecision {
                 decision: "pass".to_string(),
                 summary: Some(summary),
@@ -107,10 +106,8 @@ fn build_decision(kit: &AsyncKit<AsyncReady>, raw: &str) -> HookDecision {
 }
 
 /// Queries the database for a rename summary.
-fn summarize_rename(
-    kit: &AsyncKit<AsyncReady>,
-) -> std::result::Result<HookSummary, CodeNexusError> {
-    let storage = kit.require::<StorageModule>()?;
+fn summarize_rename(nexus: &crate::sdk::Nexus) -> std::result::Result<HookSummary, CodeNexusError> {
+    let storage = nexus.storage()?;
     let rows = storage.query("MATCH (n:Function) RETURN count(n) AS total")?;
     let total = rows
         .first()
@@ -148,11 +145,11 @@ fn summarize_rename(
 
 /// Reads stdin, builds the hook decision, and prints JSON.
 #[cfg(any(feature = "cli", test))]
-fn run(kit: &AsyncKit<AsyncReady>) -> Result<(), CodeNexusError> {
+fn run(nexus: &crate::sdk::Nexus) -> Result<(), CodeNexusError> {
     let stdin = std::io::stdin();
     let mut input = String::new();
     stdin.lock().read_line(&mut input)?;
-    let decision = build_decision(kit, &input);
+    let decision = build_decision(nexus, &input);
     let json = serde_json::to_string(&decision)?;
     println!("{json}");
     Ok(())
@@ -167,23 +164,23 @@ fn run(kit: &AsyncKit<AsyncReady>) -> Result<(), CodeNexusError> {
     cli = true
 )]
 async fn hook() -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    run(&kit).map_err(|e| to_api_error(e, "hook_error"))
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
+    run(&nexus).map_err(|e| to_api_error(e, "hook_error"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig};
+    use crate::kit::{build_kit, KitBootstrapConfig};
 
-    fn fresh_kit() -> (tempfile::TempDir, AsyncKit<AsyncReady>) {
+    fn fresh_kit() -> (tempfile::TempDir, crate::sdk::Nexus) {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("hook_test.lbug");
         let kit = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(build_kit(&KitBootstrapConfig::new(path)))
             .expect("build_kit");
-        (dir, kit)
+        (dir, crate::sdk::Nexus::from_kit(kit))
     }
 
     // --- decision is always "pass" ---
@@ -307,7 +304,7 @@ mod tests {
     #[test]
     fn build_decision_post_tool_use_rename_emits_summary() {
         let (_dir, kit) = fresh_kit();
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let storage = kit.storage().expect("require_storage");
         let node =
             crate::model::Node::builder(crate::model::NodeLabel::Function, "parse", "demo.parse")
                 .id("f1")
@@ -394,7 +391,7 @@ mod tests {
     #[test]
     fn summarize_rename_classifies_low_medium_high_risk() {
         let (_dir, kit) = fresh_kit();
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let storage = kit.storage().expect("require_storage");
 
         storage
             .save_nodes(
@@ -439,7 +436,7 @@ mod tests {
     #[test]
     fn build_decision_post_tool_use_rename_classifies_risk() {
         let (_dir, kit) = fresh_kit();
-        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let storage = kit.storage().expect("require_storage");
 
         storage
             .save_nodes(&[fn_node("f_risky")], crate::model::NodeLabel::Function)

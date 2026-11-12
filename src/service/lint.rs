@@ -5,13 +5,14 @@ use serde::Serialize;
 
 use crate::analysis::rules::{parse_rules, ArchitectureLinter, RuleSeverity, RuleViolation};
 use crate::diagnostics::Diagnostic;
+#[cfg(all(test, feature = "analysis"))]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 use crate::service::project::resolve_project_id;
 #[cfg(feature = "cli")]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -48,7 +49,7 @@ pub struct LintOutput {
 
 /// Core logic — evaluates the rule pack against an injected Kit.
 pub fn run_lint(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     project: &str,
     rules_path: &str,
     fail_on: &str,
@@ -60,10 +61,10 @@ pub fn run_lint(
     let rules = parse_rules(&raw)?;
 
     if !project.trim().is_empty() {
-        let storage = kit.require::<StorageModule>()?;
+        let storage = nexus.storage()?;
         resolve_project_id(&*storage, project)?;
     }
-    let storage = kit.require::<StorageModule>()?;
+    let storage = nexus.storage()?;
     let linter = ArchitectureLinter::new(&*storage);
     let evaluated = linter.lint(&rules);
     let violations: Vec<RuleViolation> = evaluated.iter().filter(|v| v.violated).cloned().collect();
@@ -114,9 +115,9 @@ fn severity_rank(severity: RuleSeverity) -> u8 {
     cli = true
 )]
 async fn lint(rules: String, fail_on: String, project: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let output =
-        run_lint(&kit, &project, &rules, &fail_on).map_err(|e| to_api_error(e, "lint_error"))?;
+        run_lint(&nexus, &project, &rules, &fail_on).map_err(|e| to_api_error(e, "lint_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
@@ -145,7 +146,7 @@ mod tests {
             .expect("build_kit")
     }
 
-    fn seeded_kit() -> (TempDir, AsyncKit<AsyncReady>) {
+    fn seeded_kit() -> (TempDir, crate::sdk::Nexus) {
         let dir = TempDir::new().unwrap();
         let kit = build_kit_for_db(&dir.path().join("lint_db"));
         let storage = kit.require::<StorageModule>().unwrap();
@@ -158,7 +159,7 @@ mod tests {
         storage
             .execute("CREATE (:CodeRelation {id: 'e1', source: 'f1', target: 'f2', type: 'IMPORTS', confidence: 0.95, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});")
             .unwrap();
-        (dir, kit)
+        (dir, crate::sdk::Nexus::from_kit(kit))
     }
 
     fn write_rules(dir: &TempDir, body: &str) -> String {

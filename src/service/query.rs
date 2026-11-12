@@ -6,8 +6,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[cfg(any(feature = "cli", feature = "mcp", test))]
-use crate::kit::{AsyncKit, AsyncReady, QueryModule};
+#[cfg(test)]
+use crate::kit::{AsyncKit, AsyncReady};
 use crate::query::{validate_cypher_subset, QueryResult};
 #[cfg(all(any(feature = "cli", feature = "mcp"), not(feature = "cache")))]
 use crate::service::error::kit_not_initialized;
@@ -18,7 +18,7 @@ use crate::service::error::CodeNexusError;
 // run_query_cached 在 test 组合（无 cli/mcp）下也会编译，kit 须随行——
 // 否则 core,lsp,cache 等含 cache 的无 cli 组合 lib test 编译失败（E0425）。
 #[cfg(any(feature = "cli", feature = "mcp", all(test, feature = "cache")))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 #[cfg(all(any(feature = "cli", feature = "mcp", test), feature = "cache"))]
 use oxcache::cached;
 
@@ -46,8 +46,8 @@ fn query_output(r: QueryResult) -> QueryOutput {
 
 /// Runs query against an injected Kit (testable core).
 #[cfg(any(feature = "cli", feature = "mcp", test))]
-pub fn run_query(kit: &AsyncKit<AsyncReady>, cypher: &str) -> Result<QueryOutput, CodeNexusError> {
-    let q = kit.require::<QueryModule>()?;
+pub fn run_query(nexus: &crate::sdk::Nexus, cypher: &str) -> Result<QueryOutput, CodeNexusError> {
+    let q = nexus.query()?;
     validate_cypher_subset(cypher)?;
     let result = q.cypher(cypher)?;
     Ok(query_output(result))
@@ -72,8 +72,8 @@ pub fn run_query(kit: &AsyncKit<AsyncReady>, cypher: &str) -> Result<QueryOutput
     key = "{db_key}:{cypher}"
 )]
 pub fn run_query_cached(db_key: String, cypher: String) -> Result<QueryOutput, CodeNexusError> {
-    let kit = kit().ok_or_else(CodeNexusError::kit_not_initialized)?;
-    run_query(&kit, &cypher)
+    let nexus = nexus().ok_or_else(CodeNexusError::kit_not_initialized)?;
+    run_query(&nexus, &cypher)
 }
 
 /// DB identity for cache keys; `"unknown"` when `build_kit` hasn't run.
@@ -96,8 +96,8 @@ async fn query(cypher: String) -> Result<(), ApiError> {
     let result = run_query_cached(cache_db_key(), cypher);
     #[cfg(not(feature = "cache"))]
     let result = {
-        let kit = kit().ok_or_else(kit_not_initialized)?;
-        run_query(&kit, &cypher)
+        let nexus = nexus().ok_or_else(kit_not_initialized)?;
+        run_query(&nexus, &cypher)
     };
     let result = result.map_err(|e| to_api_error(e, "query_error"))?;
     let json = serde_json::to_string(&result)
@@ -119,8 +119,8 @@ async fn query_mcp(cypher: String) -> Result<QueryOutput, ApiError> {
     return run_query_cached(cache_db_key(), cypher).map_err(|e| to_api_error(e, "query_error"));
     #[cfg(not(feature = "cache"))]
     {
-        let kit = kit().ok_or_else(kit_not_initialized)?;
-        run_query(&kit, &cypher).map_err(|e| to_api_error(e, "query_error"))
+        let nexus = nexus().ok_or_else(kit_not_initialized)?;
+        run_query(&nexus, &cypher).map_err(|e| to_api_error(e, "query_error"))
     }
 }
 
@@ -138,6 +138,10 @@ mod tests {
         (dir, path)
     }
 
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
+    }
+
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(db.to_path_buf());
         tokio::runtime::Runtime::new()
@@ -150,7 +154,7 @@ mod tests {
     #[test]
     #[serial_test::serial(kit_init)]
     fn run_query_cached_roundtrip_and_invalidation() {
-        use crate::cache::{CacheModule, MACRO_QUERY_SERVICE};
+        use crate::cache::MACRO_QUERY_SERVICE;
 
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
@@ -170,8 +174,8 @@ mod tests {
         );
 
         // Graph mutations clear the macro registry via CacheStore semantics.
-        let kit = crate::service::runtime::kit().expect("kit");
-        let cache = kit.require::<CacheModule>().expect("cache capability");
+        let nexus = crate::sdk::Nexus::from_runtime().expect("kit");
+        let cache = nexus.cache().expect("cache capability");
         cache.invalidate_all();
         assert!(
             svc.get_bytes_sync(&key).expect("get").is_none(),
@@ -189,7 +193,7 @@ mod tests {
     #[test]
     fn run_query_returns_error_for_empty_cypher() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err = run_query(&kit, "").expect_err("empty query should error");
         match err {
             CodeNexusError::Query(QueryError::InvalidQuery(msg)) => {
@@ -202,7 +206,7 @@ mod tests {
     #[test]
     fn run_query_returns_error_for_whitespace_only() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let err = run_query(&kit, "   \t\n  ").expect_err("whitespace query should error");
         assert!(matches!(
             err,
@@ -213,7 +217,7 @@ mod tests {
     #[test]
     fn run_query_succeeds_for_valid_match_query_on_empty_db() {
         let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let result = run_query(&kit, "MATCH (n) RETURN n LIMIT 1");
         // LadybugDB may return empty result or succeed; either is acceptable.
         match result {

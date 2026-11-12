@@ -77,22 +77,23 @@ pub(crate) const DEFAULT_MAX_RETRIES: u32 = 3;
 /// verify the threshold arithmetic.
 pub(crate) const RAM_FIRST_AMPLIFICATION_FACTOR: u64 = 8;
 
-/// Classifies whether an error message is a transient database-lock /
-/// write-transaction conflict that [`with_retry`] should retry on.
+/// Opens the index database through the crate's unified open path
+/// ([`crate::storage::open::open_fresh`], writable + WAL replay) with lock
+/// backoff (3 retries, 100/200/400ms — the same budget this module used
+/// before the open path moved to `storage::open`).
 ///
-/// Covers two error families:
-/// - classic `"database is locked"` / `"Lock timeout"` (cross-process,
-///   SQLite-style contention)
-/// - lbug 0.18.2 in-process concurrent write: `"Only one write transaction
-///   at a time is allowed in the system"` (verified via
-///   `concurrency_probe_write_write` — 306/400 failures, none matched the
-///   old "locked"/"Lock" patterns). The full characteristic phrase is used
-///   rather than the shorter "write transaction" to avoid matching unrelated
-///   commit/rollback messages.
-fn is_lock_conflict(msg: &str) -> bool {
-    msg.contains("locked")
-        || msg.contains("Lock")
-        || msg.contains("Only one write transaction at a time")
+/// Lock exhaustion surfaces as [`IndexError::DatabaseLocked`] (exit code 2),
+/// preserving the classified-error contract of the pre-unification
+/// `with_retry`-wrapped open (a bare `IndexError::from` would bury
+/// [`StorageError::DatabaseLocked`] inside `IndexError::Storage` and lose
+/// the exit-code distinction).
+fn open_repo_with_retry(db_path: &Path) -> Result<Repository> {
+    crate::storage::open::open_fresh(db_path, crate::storage::open::OpenMode::ReadWrite).map_err(
+        |e| match e {
+            StorageError::DatabaseLocked { .. } => IndexError::DatabaseLocked,
+            other => IndexError::from(other),
+        },
+    )
 }
 
 /// Executes a database operation with retry on lock.
@@ -100,10 +101,13 @@ fn is_lock_conflict(msg: &str) -> bool {
 /// Retries up to `max_retries` times with exponential backoff
 /// (100ms, 200ms, 400ms — each delay computed by
 /// [`limiteron::retry::delay_for_attempt`] with initial 100ms, factor 2.0,
-/// cap 400ms, no jitter). A failure classified by [`is_lock_conflict`]
-/// is treated as a transient lock and retried; any other error is propagated
-/// immediately. When all attempts are exhausted on a lock error,
-/// [`IndexError::DatabaseLocked`] is returned.
+/// cap 400ms, no jitter). A failure classified by
+/// [`crate::storage::open::is_lock_conflict`] (the crate's single lock
+/// predicate — same message-shape set this module hand-rolled before the
+/// predicate moved to `storage::open`) is treated as a transient lock and
+/// retried; any other error is propagated immediately. When all attempts
+/// are exhausted on a lock error, [`IndexError::DatabaseLocked`] is
+/// returned.
 ///
 /// # Arguments
 ///
@@ -125,7 +129,9 @@ where
     for attempt in 0..=max_retries {
         match f() {
             Ok(v) => return Ok(v),
-            Err(IndexError::Storage(StorageError::Query(ref msg))) if is_lock_conflict(msg) => {
+            Err(IndexError::Storage(ref storage_err))
+                if crate::storage::open::is_lock_conflict(storage_err) =>
+            {
                 if attempt < max_retries {
                     let delay = limiteron::retry::delay_for_attempt(
                         attempt + 1,
@@ -260,11 +266,8 @@ impl IndexFacade {
     /// Equivalent to `index_incremental` with `force=true` for the parse
     /// phase, but always (re)creates the project node.
     pub fn index(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult> {
-        // Repository::open runs init_schema internally; retry on transient
-        // database locks.
-        let repository = with_retry(DEFAULT_MAX_RETRIES, || {
-            Repository::open(&self.db_path).map_err(IndexError::from)
-        })?;
+        // Unified open path (writable, schema init inside) with lock backoff.
+        let repository = open_repo_with_retry(&self.db_path)?;
         let pipeline = Pipeline::new(repository).with_diff_hints(Arc::clone(&self.diff_hints));
         let result = pipeline.run(path, project_name, force)?;
         #[cfg(feature = "cache")]
@@ -380,9 +383,7 @@ impl IndexFacade {
             }
         }
 
-        let repository = with_retry(DEFAULT_MAX_RETRIES, || {
-            Repository::open(&self.db_path).map_err(IndexError::from)
-        })?;
+        let repository = open_repo_with_retry(&self.db_path)?;
         let pipeline = Pipeline::new(repository).with_diff_hints(Arc::clone(&self.diff_hints));
         // `run_ram_first` takes ownership of `compressed`; it is dropped when
         // `run_ram_first` returns (after the single COPY FROM dump in LoadPhase).

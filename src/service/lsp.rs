@@ -18,10 +18,14 @@ use serde::Serialize;
 use crate::service::error::to_api_error;
 use crate::service::error::CodeNexusError;
 
+#[cfg(all(feature = "lsp", test))]
+use crate::lsp::LspRegistry;
 #[cfg(feature = "lsp")]
 use crate::lsp::{LspError, LspProvider};
 #[cfg(feature = "cli")]
 use crate::service::error::wrap_error;
+#[cfg(feature = "cli")]
+use crate::service::runtime::nexus;
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -53,24 +57,33 @@ fn start_or_err(client: &dyn LspProvider, workspace: &Path) -> Result<(), CodeNe
     client.start(workspace).map_err(lsp_error_to_cli)
 }
 
-/// Selects an LSP client for `file` via the [`crate::lsp::LspRegistry`]
-/// capability — the extension dispatch lives in `src/lsp/registry.rs`
-/// (adding a provider is a registration change only).
-///
-/// Uncovered extensions are a typed error (no implicit default backend: the
-/// pre-registry match silently started rust-analyzer for any unknown
-/// extension).
-#[cfg(feature = "lsp")]
-fn select_provider(file: &Path) -> Result<std::sync::Arc<dyn LspProvider>, CodeNexusError> {
-    let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
-    crate::lsp::registry::default_registry()
-        .select(file)
-        .ok_or_else(|| {
-            CodeNexusError::InvalidInput(format!(
-                "no LSP provider registered for extension .{ext}; file: {}",
-                file.display()
-            ))
-        })
+/// Test shim over [`LspRegistry::select`] — the core/test helpers mirror
+/// the service flow without the process-global path.
+#[cfg(all(feature = "lsp", test))]
+fn select_provider(
+    registry: &dyn LspRegistry,
+    file: &Path,
+) -> Option<std::sync::Arc<dyn LspProvider>> {
+    registry.select(file)
+}
+
+/// Resolves a provider from the process-global registry for CLI wrappers.
+#[cfg(all(feature = "cli", feature = "lsp"))]
+fn runtime_provider(file: &Path) -> Result<std::sync::Arc<dyn LspProvider>, CodeNexusError> {
+    let nexus = nexus().ok_or_else(CodeNexusError::kit_not_initialized)?;
+    let registry = nexus.lsp().map_err(CodeNexusError::from)?;
+    registry.select(file).ok_or_else(|| {
+        let supported: Vec<&str> = registry
+            .providers()
+            .iter()
+            .map(|entry| entry.extension)
+            .collect();
+        CodeNexusError::InvalidInput(format!(
+            "no LSP provider registered for '{}' (supported extensions: {})",
+            file.display(),
+            supported.join(", ")
+        ))
+    })
 }
 
 /// Prints a serializable value as JSON to stdout.
@@ -247,7 +260,7 @@ async fn lsp_goto_def(
     ensure_file_exists(&file_path).map_err(|e| to_api_error(e, "lsp_error"))?;
     let (line, col) = cli_to_lsp_position(line, col);
 
-    let client = select_provider(&file_path).map_err(|e| to_api_error(e, "lsp_error"))?;
+    let client = runtime_provider(&file_path).map_err(|e| to_api_error(e, "lsp_error"))?;
     start_or_err(client.as_ref(), ws).map_err(|e| to_api_error(e, "lsp_error"))?;
 
     let result = client.definition(&file_path, line, col);
@@ -278,7 +291,7 @@ async fn lsp_hover(file: String, line: u32, col: u32, workspace: String) -> Resu
     ensure_file_exists(&file_path).map_err(|e| to_api_error(e, "lsp_error"))?;
     let (line, col) = cli_to_lsp_position(line, col);
 
-    let client = select_provider(&file_path).map_err(|e| to_api_error(e, "lsp_error"))?;
+    let client = runtime_provider(&file_path).map_err(|e| to_api_error(e, "lsp_error"))?;
     start_or_err(client.as_ref(), ws).map_err(|e| to_api_error(e, "lsp_error"))?;
 
     let result = client.hover(&file_path, line, col);
@@ -518,7 +531,13 @@ mod tests {
         let ws = Path::new(workspace);
         let file_path = resolve_file(file, ws);
 
-        let client = select_provider(&file_path)?;
+        let registry = crate::lsp::DefaultLspRegistry::production();
+        let Some(client) = select_provider(&registry, &file_path) else {
+            return Err(CodeNexusError::InvalidInput(format!(
+                "no LSP provider for '{}'",
+                file_path.display()
+            )));
+        };
         start_or_err(client.as_ref(), ws)?;
 
         let result = client.definition(&file_path, line, col);
@@ -535,7 +554,13 @@ mod tests {
         let ws = Path::new(workspace);
         let file_path = resolve_file(file, ws);
 
-        let client = select_provider(&file_path)?;
+        let registry = crate::lsp::DefaultLspRegistry::production();
+        let Some(client) = select_provider(&registry, &file_path) else {
+            return Err(CodeNexusError::InvalidInput(format!(
+                "no LSP provider for '{}'",
+                file_path.display()
+            )));
+        };
         start_or_err(client.as_ref(), ws)?;
 
         let result = client.hover(&file_path, line, col);
@@ -559,30 +584,18 @@ mod tests {
     }
 
     #[test]
-    fn select_provider_hits_registered_backend_for_rs_files() {
-        let provider = select_provider(Path::new("/tmp/lib.rs")).expect("rs is wired");
+    fn select_provider_rust_for_rs_files() {
+        let registry = crate::lsp::DefaultLspRegistry::production();
+        let provider = select_provider(&registry, Path::new("/tmp/lib.rs")).expect("rs is wired");
         let _ = provider.shutdown();
     }
 
     #[test]
-    fn select_provider_hits_registered_backend_for_py_files() {
-        let provider = select_provider(Path::new("/tmp/module.py")).expect("py is wired");
+    fn select_provider_pyright_for_py_files() {
+        let registry = crate::lsp::DefaultLspRegistry::production();
+        let provider =
+            select_provider(&registry, Path::new("/tmp/module.py")).expect("py is wired");
         let _ = provider.shutdown();
-    }
-
-    #[test]
-    fn select_provider_errors_for_uncovered_extension() {
-        // The registry has no implicit default backend: uncovered extensions
-        // (e.g. .js) are a typed error instead of silently starting
-        // rust-analyzer.
-        let err = match select_provider(Path::new("/tmp/app.js")) {
-            Err(err) => err,
-            Ok(_) => panic!("js is not wired, must not select"),
-        };
-        assert!(
-            err.to_string().contains("no LSP provider registered"),
-            "error must name the registry miss: {err}"
-        );
     }
 
     // print_json
@@ -594,25 +607,25 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // select_provider: extension coverage
+    // select_provider: uncovered extensions select None (no implicit default
+    // backend — the pre-registry match silently started rust-analyzer).
 
     #[test]
-    fn select_provider_errors_for_extensionless_file() {
-        // Extensionless files have no registry entry — precise error, no
-        // implicit rust-analyzer fallback.
-        let err = match select_provider(Path::new("/tmp/Makefile")) {
-            Err(err) => err,
-            Ok(_) => panic!("extensionless files have no provider"),
-        };
-        assert!(
-            err.to_string().contains("no LSP provider registered"),
-            "error must name the registry miss: {err}"
-        );
+    fn select_provider_no_provider_for_no_extension() {
+        let registry = crate::lsp::DefaultLspRegistry::production();
+        assert!(select_provider(&registry, Path::new("/tmp/Makefile")).is_none());
+    }
+
+    #[test]
+    fn select_provider_no_provider_for_js_files() {
+        let registry = crate::lsp::DefaultLspRegistry::production();
+        assert!(select_provider(&registry, Path::new("/tmp/app.js")).is_none());
     }
 
     #[test]
     fn select_provider_gopls_for_go_files() {
-        let provider = select_provider(Path::new("/tmp/main.go")).expect("go is wired");
+        let registry = crate::lsp::DefaultLspRegistry::production();
+        let provider = select_provider(&registry, Path::new("/tmp/main.go")).expect("go is wired");
         let _ = provider.shutdown();
     }
 
@@ -636,7 +649,8 @@ mod tests {
 
     #[test]
     fn start_or_err_with_nonexistent_workspace_does_not_panic() {
-        let client = select_provider(Path::new("/tmp/test.rs")).expect("rs is wired");
+        let registry = crate::lsp::DefaultLspRegistry::production();
+        let client = select_provider(&registry, Path::new("/tmp/test.rs")).expect("rs is wired");
         let _ = start_or_err(client.as_ref(), Path::new("/nonexistent/workspace/xyz"));
         let _ = client.shutdown();
     }

@@ -45,12 +45,17 @@
 //! [`EmbedCapability`] is self-contained, however: it only owns the
 //! embedding-service config and does not touch the database directly
 //! (storage operations are orchestrated by `search_cmd` via
-//! `QueryFacade::connection`). Therefore `dependencies = &[]` at the type
-//! level; the bootstrap enforces build ordering
-//! (Storage → ... → Embed). This mirrors the
-//! [`QueryModule`](crate::query::module::QueryModule),
-//! [`TraceModule`](crate::trace::module::TraceModule), and
-//! [`DaemonModule`](crate::daemon::module::DaemonModule) design.
+//! `QueryFacade::connection`); the bootstrap enforces build ordering
+//! (Storage → ... → Embed).
+//!
+//! With the `cache` feature enabled the module declares a **real** dependency
+//! on [`CacheModule`](crate::cache::CacheModule): the build step requires the
+//! cache capability to wrap the client in
+//! [`CachedEmbedClient`](crate::embed::client::CachedEmbedClient). Declaring
+//! the dependency (rather than a best-effort `require(..).ok()`) makes
+//! trait-kit build the cache in an earlier topological layer — same-layer
+//! batch builds insert capabilities only after the whole layer completes, so
+//! the old `.ok()` was `None` on every production boot.
 //!
 //! [`EmbeddingStorage`]: super::EmbeddingStorage
 //! [`OpenAIEmbedClient`]: super::OpenAIEmbedClient
@@ -100,7 +105,15 @@ pub struct EmbedModule;
 impl ModuleMeta for EmbedModule {
     const NAME: &'static str = "embed";
     fn dependencies() -> &'static [(&'static str, TypeId)] {
-        &[]
+        // The cache capability is a hard build-time input when the feature is
+        // compiled in: `CachedEmbedClient` wraps every embed call. Declaring
+        // it splits the build into two topological layers (cache first), which
+        // is what makes the `require::<CacheModule>()` below resolve.
+        #[cfg(feature = "cache")]
+        const DEPS: &[(&str, TypeId)] = &[("cache", TypeId::of::<crate::cache::CacheModule>())];
+        #[cfg(not(feature = "cache"))]
+        const DEPS: &[(&str, TypeId)] = &[];
+        DEPS
     }
 }
 
@@ -116,11 +129,16 @@ impl AsyncAutoBuilder for EmbedModule {
             let config = kit
                 .config::<EmbeddingConfig>()
                 .map_err(|e| EmbedError::Unavailable(e.to_string()))?;
-            // Optional cache wiring (namespace-isolated content-addressed
-            // vectors — see CachedEmbedClient). Absent when the `cache`
-            // feature is off or the CacheModule is not registered.
+            // Hard cache wiring (namespace-isolated content-addressed
+            // vectors — see CachedEmbedClient). The dependency declared in
+            // `dependencies()` guarantees the cache exists in an earlier
+            // topological layer; a missing capability is a build error, not a
+            // silent `None` (which kept production caching permanently off).
             #[cfg(feature = "cache")]
-            let cache = kit.require::<crate::cache::CacheModule>().ok();
+            let cache = Some(
+                kit.require::<crate::cache::CacheModule>()
+                    .map_err(|e| EmbedError::Unavailable(e.to_string()))?,
+            );
             #[cfg(not(feature = "cache"))]
             let cache = ();
             Self::build_cap(&config, cache)
@@ -177,7 +195,8 @@ struct EmbedCapability {
     /// CacheModule when available — repeated identical texts (e.g. the same
     /// query across daemon incremental runs, which used to be re-embedded
     /// after every index because the shared store's `invalidate_all` cleared
-    /// them) now hit the cache.
+    /// them) now hit the cache. Always `Some` when the `cache` feature is on:
+    /// the capability is a declared build dependency.
     #[cfg(feature = "cache")]
     cache: Option<Arc<dyn crate::cache::capability::CacheStore>>,
 }
@@ -328,10 +347,19 @@ mod tests {
     }
 
     /// Verify the full AsyncKit registration flow works end-to-end.
+    ///
+    /// With the `cache` feature on, `CacheModule` must be registered too —
+    /// `EmbedModule` declares it as a build dependency.
     #[tokio::test]
     async fn kit_registration_flow() {
         let mut kit = AsyncKit::new();
         kit.set_config(EmbeddingConfig::default());
+        #[cfg(feature = "cache")]
+        {
+            kit.set_config(crate::cache::CacheConfig::default());
+            kit.register::<crate::cache::CacheModule>()
+                .expect("register::<CacheModule>");
+        }
         kit.register::<EmbedModule>()
             .expect("register::<EmbedModule>");
         let kit = kit.build().await.expect("build");
@@ -341,6 +369,26 @@ mod tests {
         let _required = kit
             .require::<EmbedModule>()
             .expect("require::<EmbedModule>");
+    }
+
+    /// The cache capability is a declared build dependency (not a best-effort
+    /// `require(..).ok()`): without the declaration trait-kit builds Embed and
+    /// Cache in the same topological layer, so the embed build always saw
+    /// `None` and production caching stayed off.
+    #[cfg(feature = "cache")]
+    #[test]
+    fn dependencies_declare_cache_module() {
+        let deps = <EmbedModule as ModuleMeta>::dependencies();
+        assert_eq!(deps.len(), 1, "Embed must declare exactly the cache dep");
+        assert_eq!(deps[0].0, "cache");
+        assert_eq!(deps[0].1, TypeId::of::<crate::cache::CacheModule>());
+    }
+
+    /// Without the `cache` feature the module has no build dependencies.
+    #[cfg(not(feature = "cache"))]
+    #[test]
+    fn dependencies_are_empty_without_cache_feature() {
+        assert!(<EmbedModule as ModuleMeta>::dependencies().is_empty());
     }
 
     /// `EmbedConfig` is a re-export of `EmbeddingConfig` (type alias).

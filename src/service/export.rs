@@ -15,14 +15,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::storage::StorageConfig;
 
-#[cfg(any(feature = "cli", feature = "mcp", test))]
+#[cfg(test)]
 use crate::kit::{AsyncKit, AsyncReady};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::error::CodeNexusError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use crate::service::runtime::kit;
+use crate::service::runtime::nexus;
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -80,11 +80,11 @@ fn zstd_compress(input: &[u8]) -> Result<Vec<u8>, CodeNexusError> {
 /// Runs export against an injected Kit (testable core).
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 pub fn run_export(
-    kit: &AsyncKit<AsyncReady>,
+    nexus: &crate::sdk::Nexus,
     output: &str,
     project: &str,
 ) -> Result<ExportOutput, CodeNexusError> {
-    let storage_config = kit.config::<StorageConfig>()?;
+    let storage_config = nexus.raw_kit().config::<StorageConfig>()?;
     let db_path = storage_config.db_path.clone();
     let db_path_str = db_path.to_string_lossy().into_owned();
 
@@ -152,9 +152,9 @@ pub fn run_export(
     cli = true
 )]
 async fn export(output: String, project: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let nexus = nexus().ok_or_else(kit_not_initialized)?;
     let result =
-        run_export(&kit, &output, &project).map_err(|e| to_api_error(e, "export_error"))?;
+        run_export(&nexus, &output, &project).map_err(|e| to_api_error(e, "export_error"))?;
     let json = serde_json::to_string(&result)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "export_error"))?;
     println!("{json}");
@@ -172,6 +172,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_export_testdb");
         (dir, path)
+    }
+
+    fn nexus_for_db(db: &std::path::Path) -> crate::sdk::Nexus {
+        crate::sdk::Nexus::from_kit(build_kit_for_db(db))
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
@@ -249,7 +253,7 @@ mod tests {
     #[test]
     fn run_export_returns_error_when_db_does_not_exist() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         // Delete the DB file so run_export can't find it.
         let _ = std::fs::remove_file(&db);
         let artifact = dir.path().join("missing.cnxp");
@@ -301,7 +305,7 @@ mod tests {
     #[test]
     fn run_export_creates_valid_artifact() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let artifact = dir.path().join("exported.cnxp");
 
         let output = run_export(&kit, artifact.to_str().unwrap(), "demo")
@@ -327,7 +331,7 @@ mod tests {
     #[test]
     fn run_export_with_empty_project_uses_none_in_manifest() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let artifact = dir.path().join("empty_project.cnxp");
 
         let output =
@@ -349,7 +353,7 @@ mod tests {
     #[test]
     fn run_export_returns_error_when_output_directory_does_not_exist() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         // Point output to a path under a nonexistent directory.
         let artifact = dir.path().join("nonexistent_dir").join("out.cnxp");
         match run_export(&kit, artifact.to_str().unwrap(), "demo") {
@@ -368,7 +372,7 @@ mod tests {
     #[test]
     fn run_export_manifest_contains_all_expected_fields() {
         let (dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
+        let kit = nexus_for_db(&db);
         let artifact = dir.path().join("full_manifest.cnxp");
 
         let output = run_export(&kit, artifact.to_str().unwrap(), "test_project")
