@@ -528,6 +528,7 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 
 | 版本 | 日期 | 要点 |
 |------|------|------|
+| 未发布 | 2026-11-13 | 全家族接口归一：trait-kit 0.5.0-rc.14（i18n PluralCategory 重导出）、sdforge 0.5.0-rc.11、confers 0.6.0-rc.13；公共 API 无破坏 |
 | 0.4.0-rc.2 | 2026-10-16 | 嵌入后端 ort → vecboost（Candle）切换并需重新索引；自研五库升级至 crates.io 最新版（trait-kit 0.5.0-rc.9、sdforge 0.5.0-rc.8、inklog 0.3.0-rc.9、limiteron 0.3.0-rc.7、oxcache 0.5.0-rc.8）；graph-viewer server crate 移除 |
 | 0.3.13-rc.1 | 2026-09-21 | 跨仓解耦：基库改走 crates.io 发布版（trait-kit rc.6 / sdforge、oxcache rc.5 / inklog rc.5）；embed→embeddings 更名；增量索引跨文件边丢失修复 |
 | 0.3.12 | 2026-07-30 | 动态 `max_db_size` + `--fresh` 标志解决 DB 膨胀；read-only 连接 4 TiB cap 修复 >16 GiB 数据库查询崩溃；LSP hover 批量 UNWIND 更新等 P 系列修复 |

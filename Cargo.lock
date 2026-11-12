@@ -797,7 +797,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -831,9 +831,9 @@ dependencies = [
 
 [[package]]
 name = "confers"
-version = "0.6.0-rc.12"
+version = "0.6.0-rc.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cc005e9f772c7f1dac1a701379975300ae289fd5a47cee72b21615254937796"
+checksum = "05847095392cf83d9fbcdfe4e0bd9166c85175d0cdf33b3c1783dd174050a4e6"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -855,7 +855,7 @@ dependencies = [
  "regex",
  "schemars",
  "serde",
- "serde-saphyr 1.3.0",
+ "serde-saphyr 2.1.1",
  "serde_json",
  "serde_path_to_error",
  "sha2 0.11.1",
@@ -870,9 +870,9 @@ dependencies = [
 
 [[package]]
 name = "confers-macros"
-version = "0.6.0-rc.12"
+version = "0.6.0-rc.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36d79f65d1c5385a3edb6e2b8ea9f0d7004c196e26847bbae4eeedffe302f216"
+checksum = "2563affa595319211c8cbea52095f8b808e57c27e002598dcede1545501c3ef1"
 dependencies = [
  "darling 0.24.1",
  "proc-macro2",
@@ -1367,7 +1367,7 @@ dependencies = [
  "regex",
  "sea-orm",
  "serde",
- "serde-saphyr 2.0.0",
+ "serde-saphyr 2.1.1",
  "serde_json",
  "sqlparser",
  "sys-locale",
@@ -1523,7 +1523,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1616,7 +1616,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1913,7 +1913,6 @@ dependencies = [
  "once_cell",
  "regex",
  "smallvec",
- "url",
 ]
 
 [[package]]
@@ -2037,9 +2036,9 @@ dependencies = [
 
 [[package]]
 name = "granit-parser"
-version = "2.0.0"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da55feca5d1625466bae068f9fd4b87892caeae70c3fe671ddb0f50d41aebf37"
+checksum = "05f05586d4d4df3d47123207826c40b252728b438a1a07bad3c01ee6bea401df"
 dependencies = [
  "arraydeque",
  "smallvec",
@@ -2982,7 +2981,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3584,7 +3583,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4357,7 +4356,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4807,7 +4806,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4866,7 +4865,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4963,9 +4962,9 @@ checksum = "d68f2ec51b097e4c1a75b681a8bec621909b5e91f15bb7b840c4f2f7b01148b2"
 
 [[package]]
 name = "sdforge"
-version = "0.5.0-rc.10"
+version = "0.5.0-rc.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44a5dbdd22c0682ce5e77e7a4dc5cea9b4dc0176fc13bc8f81677eba0113cb04"
+checksum = "2f432e54ec9aabe6168af38f7e3be498edfee3045217115ba16270c953b559f8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5155,14 +5154,14 @@ dependencies = [
 
 [[package]]
 name = "serde-saphyr"
-version = "2.0.0"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a253edfdea34032da21af84e16fcc94f4c7a6ba237f9f3bc2dbf43cea8535c44"
+checksum = "d43fb82d550b07e6f929a58d7d0935182602f48ddead875f5ee313c41c8f07fe"
 dependencies = [
  "annotate-snippets",
  "base64 0.23.1",
  "encoding_rs_io",
- "granit-parser 2.0.0",
+ "granit-parser 2.1.0",
  "nohash-hasher",
  "num-traits",
  "serde_core",
@@ -5433,7 +5432,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5667,7 +5666,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5851,10 +5850,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6338,9 +6337,9 @@ dependencies = [
 
 [[package]]
 name = "trait-kit"
-version = "0.5.0-rc.12"
+version = "0.5.0-rc.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a9fa4c077e939f17a6f0bda0fc720ef1af104636f7da4ef2d5d29de9cd200ac"
+checksum = "fb67168334999a77008eae80a9fc4241e2a2c7f8bd9e05bc4d4c989fdcfe9ba5"
 dependencies = [
  "aho-corasick",
  "confers",
@@ -7086,7 +7085,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

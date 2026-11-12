@@ -85,7 +85,7 @@ hub = ["dep:reqwest"]
 webui = ["dep:axum", "dep:mime_guess", "dep:rust-embed", "tokio/net", "tokio/sync"]
 
 [dependencies]
-trait-kit = { version = "0.5.0-rc.12", default-features = false, features = ["async", "lifecycle", "health", "report", "shutdown"] }
+trait-kit = { version = "0.5.0-rc.14", default-features = false, features = ["async", "lifecycle", "health", "report", "shutdown"] }
 lbug = { workspace = true }
 tree-sitter = { version = "0.27", default-features = false, features = ["std"] }
 tree-sitter-c = { version = "0.24", default-features = false, optional = true }
@@ -136,7 +136,7 @@ lsp-server = { version = "0.10", default-features = false, optional = true }
 crossbeam-channel = { version = "0.5", default-features = false, features = ["std"], optional = true }
 url = { version = "2.5", default-features = false, features = ["std"], optional = true }
 # i18n 消息目录常编并转发 sdforge::i18n，故 sdforge 为常驻依赖
-sdforge = { version = "0.5.0-rc.10", default-features = false, features = ["i18n"] }
+sdforge = { version = "0.5.0-rc.11", default-features = false, features = ["i18n"] }
 limiteron = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 oxcache = { version = "0.5.0-rc.12", default-features = false, features = ["minimal", "macros"], optional = true }
