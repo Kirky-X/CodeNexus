@@ -65,21 +65,20 @@ pub fn run_query(nexus: &crate::sdk::Nexus, cypher: &str) -> Result<QueryOutput,
 /// (oxcache `#[cached]` semantics) — e.g. builds with the `cache` feature
 /// disabled at runtime paths that skip `CacheModule`.
 #[cfg(all(any(feature = "cli", feature = "mcp", test), feature = "cache"))]
-#[cached(
-    service = "codenexus-query",
-    ttl = 300,
-    sync,
-    key = "{db_key}:{cypher}"
-)]
-pub fn run_query_cached(db_key: String, cypher: String) -> Result<QueryOutput, CodeNexusError> {
+#[cached(service = "codenexus-query", ttl = 300, sync, key = "{ns}:{cypher}")]
+pub fn run_query_cached(ns: String, cypher: String) -> Result<QueryOutput, CodeNexusError> {
     let nexus = nexus().ok_or_else(CodeNexusError::kit_not_initialized)?;
     run_query(&nexus, &cypher)
 }
 
-/// DB identity for cache keys; `"unknown"` when `build_kit` hasn't run.
+/// Instance-scoped query-cache namespace — `Nexus::query_cache_ns` embeds
+/// the DB identity AND the namespace generation, so a graph-mutation bump
+/// strands this instance's older entries without touching another
+/// instance's namespace (T012 instance isolation).
 #[cfg(all(any(feature = "cli", feature = "mcp", test), feature = "cache"))]
-fn cache_db_key() -> String {
-    crate::service::runtime::db_key().unwrap_or_else(|| "unknown".to_string())
+fn query_cache_ns() -> Result<String, CodeNexusError> {
+    let nexus = nexus().ok_or_else(CodeNexusError::kit_not_initialized)?;
+    nexus.query_cache_ns().map_err(CodeNexusError::from)
 }
 
 /// CLI wrapper — prints result to stdout as JSON.
@@ -93,7 +92,10 @@ fn cache_db_key() -> String {
 )]
 async fn query(cypher: String) -> Result<(), ApiError> {
     #[cfg(feature = "cache")]
-    let result = run_query_cached(cache_db_key(), cypher);
+    let result = run_query_cached(
+        query_cache_ns().map_err(|e| to_api_error(e, "query_error"))?,
+        cypher,
+    );
     #[cfg(not(feature = "cache"))]
     let result = {
         let nexus = nexus().ok_or_else(kit_not_initialized)?;
@@ -116,7 +118,11 @@ async fn query(cypher: String) -> Result<(), ApiError> {
 )]
 async fn query_mcp(cypher: String) -> Result<QueryOutput, ApiError> {
     #[cfg(feature = "cache")]
-    return run_query_cached(cache_db_key(), cypher).map_err(|e| to_api_error(e, "query_error"));
+    return run_query_cached(
+        query_cache_ns().map_err(|e| to_api_error(e, "query_error"))?,
+        cypher,
+    )
+    .map_err(|e| to_api_error(e, "query_error"));
     #[cfg(not(feature = "cache"))]
     {
         let nexus = nexus().ok_or_else(kit_not_initialized)?;
@@ -153,40 +159,115 @@ mod tests {
     #[cfg(feature = "cache")]
     #[test]
     #[serial_test::serial(kit_init)]
-    fn run_query_cached_roundtrip_and_invalidation() {
+    fn run_query_cached_roundtrip_and_instance_scoped_invalidation() {
         use crate::cache::MACRO_QUERY_SERVICE;
 
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         crate::service::runtime::force_init_kit_for_testing(kit);
-        let db_key = crate::service::runtime::db_key().expect("build_kit sets db_key");
+        let nexus = crate::sdk::Nexus::from_runtime().expect("kit");
         let cypher = "MATCH (n) RETURN n LIMIT 3".to_string();
 
-        let first = run_query_cached(db_key.clone(), cypher.clone()).expect("first query ok");
+        // Generation-0 namespace: `cypher:{db}.g0` (T012 instance isolation).
+        let ns_g0 = nexus.query_cache_ns().expect("ns");
+        let first = run_query_cached(ns_g0.clone(), cypher.clone()).expect("first query ok");
 
         // The result must be cached under the macro service registry.
         let svc = oxcache::__internal_get_cache(MACRO_QUERY_SERVICE)
             .expect("CacheModule registers the query macro service");
-        let key = format!("{db_key}:{cypher}");
+        // oxcache escapes `:` in key-template placeholder values (%3A) —
+        // assert on the ESCAPED form the macro actually stores.
+        let key_g0 = format!(
+            "{}:{}",
+            oxcache::macro_support::escape_key_segment(&ns_g0),
+            oxcache::macro_support::escape_key_segment(&cypher)
+        );
         assert!(
-            svc.get_bytes_sync(&key).expect("get").is_some(),
-            "query result should be cached under {key}"
+            svc.get_bytes_sync(&key_g0).expect("get").is_some(),
+            "query result should be cached under {key_g0}"
         );
 
-        // Graph mutations clear the macro registry via CacheStore semantics.
-        let nexus = crate::sdk::Nexus::from_runtime().expect("kit");
+        // T012 acceptance ①: a second instance over a DIFFERENT database
+        // carries its own namespace — same-cypher entries never collide.
+        let other_dir = tempfile::TempDir::new().expect("tmpdir");
+        let other_nexus = nexus_for_db(&other_dir.path().join("other_db"));
+        let ns_other = other_nexus.query_cache_ns().expect("other ns");
+        assert_ne!(ns_other, ns_g0, "distinct DBs must get distinct namespaces");
+        let other_cypher = "MATCH (x) RETURN x LIMIT 1".to_string();
+        let key_other = format!(
+            "{}:{}",
+            oxcache::macro_support::escape_key_segment(&ns_other),
+            oxcache::macro_support::escape_key_segment(&other_cypher)
+        );
+        let _ = run_query_cached(ns_other.clone(), other_cypher.clone()).expect("other ok");
+        assert!(
+            svc.get_bytes_sync(&key_other).expect("get").is_some(),
+            "the other instance's entry must be cached under {key_other}"
+        );
+
+        // T012 acceptance ②: THIS instance's graph-mutation invalidation
+        // (same prefix the indexer's pipeline uses) bumps only this
+        // namespace's generation — the other instance's entry survives.
         let cache = nexus.cache().expect("cache capability");
-        cache.invalidate_all();
+        let db_key = nexus.db_key().expect("db identity");
+        cache.invalidate_namespace(&format!("cypher:{db_key}"));
         assert!(
-            svc.get_bytes_sync(&key).expect("get").is_none(),
-            "invalidate_all must clear the macro query cache"
+            svc.get_bytes_sync(&key_other).expect("get").is_some(),
+            "A's invalidation must not clear B's namespace"
         );
 
-        // Recompute after invalidation returns the same content
-        // (duration_ms legitimately differs between executions).
-        let second = run_query_cached(db_key, cypher).expect("recompute ok");
+        // The bumped generation makes THIS instance's old entry unreachable:
+        // the namespace advances, so the next query re-executes.
+        let ns_g1 = nexus.query_cache_ns().expect("ns after bump");
+        assert_ne!(ns_g0, ns_g1, "bump must advance the generation");
+        let second = run_query_cached(ns_g1, cypher.clone()).expect("recompute ok");
         assert_eq!(first.columns, second.columns);
         assert_eq!(first.rows, second.rows);
+        assert!(
+            svc.get_bytes_sync(&key_g0).expect("get").is_some(),
+            "generation-stranded entries age out via TTL, not instantly"
+        );
+        crate::service::runtime::reset_kit_for_testing();
+    }
+
+    /// T012 review HIGH-1 acceptance: the invalidation chain must fire
+    /// through the REAL production path — query (cached) → index run via
+    /// the indexer capability → generation advances → next query
+    /// re-executes. This is the wiring test the capability-level unit test
+    /// cannot be (it calls `invalidate_namespace` by hand).
+    #[cfg(feature = "cache")]
+    #[test]
+    #[serial_test::serial(kit_init)]
+    fn index_run_through_capability_advances_query_generation() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        crate::service::runtime::force_init_kit_for_testing(kit);
+        let nexus = crate::sdk::Nexus::from_runtime().expect("kit");
+        let cypher = "MATCH (n) RETURN count(n) AS c".to_string();
+
+        // Seed the query cache at generation 0.
+        let ns_g0 = nexus.query_cache_ns().expect("ns");
+        let _ = run_query_cached(ns_g0.clone(), cypher.clone()).expect("query ok");
+
+        // A real index run through the production capability: the
+        // indexer's pipeline carries the wired cache and bumps
+        // `cypher:{db_path}` on success.
+        let indexer = nexus.indexer().expect("indexer capability");
+        let output = indexer
+            .index(std::path::Path::new("/tmp"), "gen-probe-project", false)
+            .expect("index run");
+        let _ = output;
+
+        // The generation must have advanced: the same cache namespace read
+        // through the facade now resolves to a NEW key, so the stale
+        // entry (if any survived) is unreachable.
+        let cache = nexus.cache().expect("cache capability");
+        let db_key = nexus.db_key().expect("db identity");
+        let generation_after = cache.namespace_generation(&format!("cypher:{db_key}"));
+        assert!(
+            generation_after >= 1,
+            "a real index run must advance the query-cache generation, got {generation_after}"
+        );
         crate::service::runtime::reset_kit_for_testing();
     }
 

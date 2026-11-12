@@ -65,3 +65,18 @@ embed-runtime-thread-panic = vecboost 运行时线程 panic
 
 # cli：用法错误（src/main.rs）
 cli-no-subcommand = 未提供子命令（运行 `codenexus --help` 查看命令列表）
+
+# sdk：Nexus 门面错误面（src/sdk/nexus.rs）——镜像 trait-kit 的
+# TraitKitError 分类（T014 发布切换：SDK 枚举为自有类型）。
+sdk-error-cycle-detected = 依赖图中检测到环：{ $cycle }
+sdk-error-dependency-missing = 模块 `{ $module }` 依赖未注册的模块 `{ $missing }`
+sdk-error-already-registered = 模块 `{ $module }` 重复注册
+sdk-error-decorator-target-missing = 装饰器目标模块 `{ $module }` 未注册
+sdk-error-version-incompatible = 版本不兼容：`{ $module }` 要求 { $required }，`{ $dependency }` 提供 { $provided }
+sdk-error-build-failed = 构建失败：{ $context }：{ $source }
+sdk-error-missing-capability = 请求的能力不存在：{ $key }
+sdk-error-capability-type-mismatch = 能力类型不匹配：{ $key }
+sdk-error-missing-config = 请求的配置不存在：{ $key }
+sdk-error-lifecycle-failed = 生命周期钩子执行失败：{ $context }：{ $source }
+sdk-error-shutdown-timed-out = 优雅关闭超时，未完成阶段：{ $phases }
+sdk-diag-unknown-cycle = <未知环>

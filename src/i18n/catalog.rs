@@ -231,6 +231,22 @@ mod tests {
     /// `init()` must register every embedded FTL entry into the sdforge
     /// registry, so each `(locale, key)` resolves verbatim (host registrations
     /// win over built-in catalogs and carry `{ $name }` placeholders).
+    /// The sdk-error keys appended for T014 must survive `ftl_entries` —
+    /// the registration loop only sees keys this iterator emits.
+    #[test]
+    fn ftl_entries_emits_the_sdk_error_keys() {
+        let en = include_str!("../../locales/en/messages.ftl");
+        let sdk_keys: Vec<&str> = ftl_entries(en)
+            .map(|(k, _)| k)
+            .filter(|k| k.starts_with("sdk-error"))
+            .collect();
+        assert_eq!(
+            sdk_keys.len(),
+            11,
+            "all 11 sdk-error keys parsed: {sdk_keys:?}"
+        );
+    }
+
     #[test]
     #[serial_test::serial(i18n_catalog)]
     fn init_registers_all_embedded_entries_in_sdforge() {

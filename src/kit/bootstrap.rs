@@ -333,13 +333,10 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
 
     let built = kit.build().await?;
 
-    // Process-global DB identity so `#[cached]` query keys are namespaced
-    // per database (tests and daemon rebuilds must not share cached rows).
-    crate::service::runtime::set_db_key(format!(
-        "{}#ro={}",
-        config.db_path.display(),
-        config.read_only
-    ));
+    // T012 instance isolation: the DB identity lives on the `Nexus`
+    // instance (`Nexus::db_key` reads it from the storage config) — no
+    // process-global write, so sequentially built instances never
+    // overwrite each other's identity.
 
     Ok(built)
 }

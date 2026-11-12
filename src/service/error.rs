@@ -354,8 +354,55 @@ impl From<crate::lsp::LspRegistryError> for CodeNexusError {
 
 impl From<crate::sdk::NexusError> for CodeNexusError {
     fn from(err: crate::sdk::NexusError) -> Self {
+        // Variant-for-variant mirror: the SDK re-encodes each classification
+        // into the matching `CodeNexusError::Kit` variant so
+        // `kit_exit_code`'s taxonomy (exit codes 1/2/4) stays exact.
         match err {
-            crate::sdk::NexusError::Kit(kit) => Self::Kit(kit),
+            crate::sdk::NexusError::CycleDetected { cycle } => {
+                Self::Kit(KitError::CycleDetected { cycle })
+            }
+            crate::sdk::NexusError::DependencyMissing { module, missing } => {
+                Self::Kit(KitError::DependencyMissing { module, missing })
+            }
+            crate::sdk::NexusError::AlreadyRegistered { module } => {
+                Self::Kit(KitError::AlreadyRegistered { module })
+            }
+            crate::sdk::NexusError::DecoratorTargetMissing { module } => {
+                Self::Kit(KitError::DecoratorTargetMissing { module })
+            }
+            crate::sdk::NexusError::VersionIncompatible {
+                module,
+                dependency,
+                required,
+                provided,
+            } => Self::Kit(KitError::VersionIncompatible {
+                module,
+                dependency,
+                required,
+                provided,
+            }),
+            crate::sdk::NexusError::BuildFailed { context, source } => {
+                Self::Kit(KitError::BuildFailed { context, source })
+            }
+            crate::sdk::NexusError::MissingCapability { key } => {
+                Self::Kit(KitError::MissingCapability { key })
+            }
+            crate::sdk::NexusError::CapabilityTypeMismatch { key } => {
+                Self::Kit(KitError::CapabilityTypeMismatch { key })
+            }
+            crate::sdk::NexusError::MissingConfig { key } => {
+                Self::Kit(KitError::MissingConfig { key })
+            }
+            crate::sdk::NexusError::LifecycleFailed { context, source } => {
+                Self::Kit(KitError::LifecycleFailed { context, source })
+            }
+            // The shutdown-phase mirror is string-typed (self-owned surface);
+            // trait-kit's typed phases cannot be reconstructed from names, so
+            // this classification lands as an internal error (exit 1 — the
+            // same code `Other`-kind kit errors produce).
+            crate::sdk::NexusError::ShutdownTimedOut { phases } => {
+                Self::Internal(format!("shutdown timed out for phases: {phases:?}"))
+            }
         }
     }
 }

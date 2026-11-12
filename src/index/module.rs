@@ -67,7 +67,16 @@ pub struct IndexerModule;
 impl ModuleMeta for IndexerModule {
     const NAME: &'static str = "indexer";
     fn dependencies() -> &'static [(&'static str, TypeId)] {
-        &[]
+        // T012: the indexer owns the cache-invalidation handoff
+        // (`IndexFacade::with_cache` → pipeline invalidation), so it depends
+        // on the cache module whenever that capability exists. trait-kit's
+        // topological build order then guarantees the cache capability is
+        // present when this module's build runs.
+        #[cfg(feature = "cache")]
+        const DEPS: &[(&str, TypeId)] = &[("cache", TypeId::of::<crate::cache::CacheModule>())];
+        #[cfg(not(feature = "cache"))]
+        const DEPS: &[(&str, TypeId)] = &[];
+        DEPS
     }
 }
 
@@ -82,7 +91,19 @@ impl AsyncAutoBuilder for IndexerModule {
             let config = kit
                 .config::<IndexConfig>()
                 .map_err(|e| IndexError::Storage(StorageError::InvalidData(e.to_string())))?;
-            Self::build_cap(&config)
+            // T012: wire the cache capability into the facade so the index
+            // pipelines' namespace-scoped invalidation actually executes in
+            // production (review HIGH-1 — the with_cache handoff used to
+            // have zero non-test callers).
+            #[cfg(feature = "cache")]
+            let cache = kit
+                .require::<crate::cache::CacheModule>()
+                .map_err(|e| IndexError::Storage(StorageError::InvalidData(e.to_string())))?;
+            #[cfg(feature = "cache")]
+            let cap = Self::build_cap_with_cache(&config, Some(cache));
+            #[cfg(not(feature = "cache"))]
+            let cap = Self::build_cap_with_cache(&config, None);
+            cap
         })
     }
 }
@@ -90,9 +111,18 @@ impl AsyncAutoBuilder for IndexerModule {
 impl IndexerModule {
     /// Constructs an IndexerCapability from the given config.
     ///
-    /// Shared between [`AsyncAutoBuilder::build`] and tests.
-    pub(crate) fn build_cap(config: &IndexConfig) -> Result<Arc<dyn Indexer>, IndexError> {
+    /// Shared between [`AsyncAutoBuilder::build`] and tests. `cache` wires
+    /// the namespace-scoped invalidation handoff (`IndexFacade::with_cache`)
+    /// — `None` in cache-feature-off builds.
+    pub(crate) fn build_cap_with_cache(
+        config: &IndexConfig,
+        cache: Option<Arc<dyn crate::cache::CacheStore>>,
+    ) -> Result<Arc<dyn Indexer>, IndexError> {
         let facade = IndexFacade::new(&config.db_path)?;
+        let facade = match cache {
+            Some(cache) => facade.with_cache(cache),
+            None => facade,
+        };
         Ok(Arc::new(IndexerCapability { facade }))
     }
 }
@@ -156,14 +186,16 @@ mod tests {
 
     #[test]
     fn build_returns_send_sync_capability() {
-        let cap = IndexerModule::build_cap(&IndexConfig::in_memory()).expect("build_cap");
+        let cap = IndexerModule::build_cap_with_cache(&IndexConfig::in_memory(), None)
+            .expect("build_cap");
         fn _assert_send_sync<T: Send + Sync>(_: &T) {}
         _assert_send_sync(&cap);
     }
 
     #[test]
     fn capability_index_empty_dir_returns_zero_files() {
-        let cap = IndexerModule::build_cap(&IndexConfig::in_memory()).expect("build_cap");
+        let cap = IndexerModule::build_cap_with_cache(&IndexConfig::in_memory(), None)
+            .expect("build_cap");
         let tmp = TempDir::new().unwrap();
         let result = cap.index(tmp.path(), "empty", false).expect("index");
         assert_eq!(result.files_indexed, 0, "empty dir → 0 files indexed");
@@ -174,7 +206,8 @@ mod tests {
     #[cfg(feature = "lang-rust")]
     #[test]
     fn capability_index_real_files_creates_nodes() {
-        let cap = IndexerModule::build_cap(&IndexConfig::in_memory()).expect("build_cap");
+        let cap = IndexerModule::build_cap_with_cache(&IndexConfig::in_memory(), None)
+            .expect("build_cap");
         let tmp = TempDir::new().unwrap();
         write_file(
             tmp.path(),
@@ -190,7 +223,8 @@ mod tests {
 
     #[test]
     fn capability_path_not_found_returns_error() {
-        let cap = IndexerModule::build_cap(&IndexConfig::in_memory()).expect("build_cap");
+        let cap = IndexerModule::build_cap_with_cache(&IndexConfig::in_memory(), None)
+            .expect("build_cap");
         let result = cap.index(Path::new("/nonexistent/path/xyz"), "demo", false);
         assert!(result.is_err(), "path not found should error");
         let err = result.unwrap_err();
@@ -201,11 +235,20 @@ mod tests {
         assert_eq!(err.exit_code(), 1, "PRD §4.1.6: path not found → exit 1");
     }
 
-    /// Verify the full AsyncKit registration flow works end-to-end.
+    /// Verify the full AsyncKit registration flow works end-to-end. Under
+    /// the `cache` feature the indexer declares a cache dependency, so the
+    /// minimal kit must register the cache module first (mirrors
+    /// `build_kit`'s assembly order).
     #[tokio::test]
     async fn kit_registration_flow() {
         let mut kit = AsyncKit::new();
         kit.set_config(IndexConfig::in_memory());
+        #[cfg(feature = "cache")]
+        {
+            kit.set_config(crate::cache::CacheConfig::default());
+            kit.register::<crate::cache::CacheModule>()
+                .expect("register::<CacheModule> (indexer dependency)");
+        }
         kit.register::<IndexerModule>()
             .expect("register::<IndexerModule>");
         let kit = kit.build().await.expect("build");
@@ -220,7 +263,8 @@ mod tests {
     /// `index_incremental` on an empty directory returns zero files indexed.
     #[test]
     fn capability_index_incremental_empty_dir_returns_zero_files() {
-        let cap = IndexerModule::build_cap(&IndexConfig::in_memory()).expect("build_cap");
+        let cap = IndexerModule::build_cap_with_cache(&IndexConfig::in_memory(), None)
+            .expect("build_cap");
         let tmp = TempDir::new().unwrap();
         let result = cap
             .index_incremental(tmp.path(), "empty", false)

@@ -65,3 +65,18 @@ embed-runtime-thread-panic = vecboost runtime thread panicked
 
 # cli: usage errors (src/main.rs)
 cli-no-subcommand = no subcommand supplied (run `codenexus --help` to list commands)
+
+# sdk: Nexus facade error surface (src/sdk/nexus.rs) — mirrors trait-kit's
+# TraitKitError taxonomy (T014 release switch: the SDK enum is self-owned).
+sdk-error-cycle-detected = dependency cycle detected: { $cycle }
+sdk-error-dependency-missing = module `{ $module }` depends on unregistered module `{ $missing }`
+sdk-error-already-registered = module `{ $module }` already registered
+sdk-error-decorator-target-missing = decorator target module `{ $module }` not registered
+sdk-error-version-incompatible = version incompatible: `{ $module }` requires { $required }, `{ $dependency }` provides { $provided }
+sdk-error-build-failed = build failed: { $context }: { $source }
+sdk-error-missing-capability = missing capability: { $key }
+sdk-error-capability-type-mismatch = capability type mismatch: { $key }
+sdk-error-missing-config = missing config: { $key }
+sdk-error-lifecycle-failed = lifecycle hook failed: { $context }: { $source }
+sdk-error-shutdown-timed-out = shutdown timed out for phases: { $phases }
+sdk-diag-unknown-cycle = <unknown cycle>

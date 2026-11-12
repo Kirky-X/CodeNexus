@@ -4,7 +4,7 @@
 //! `Nexus` — the SDK facade over the assembled capability kit.
 //!
 //! One type owns the built kit and exposes the capability traits
-//! (`Arc<dyn Storage>` …) without leaking any `trait_kit::` type through
+//! (`Arc<dyn Storage>` …) without leaking any trait-kit type through
 //! signatures. Construction funnels through [`Nexus::open`] (full config)
 //! or [`Nexus::from_kit`] (a kit already assembled); the process-global
 //! path is [`Nexus::from_runtime`].

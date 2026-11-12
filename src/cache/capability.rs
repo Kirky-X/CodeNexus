@@ -65,4 +65,13 @@ pub trait CacheStore: Send + Sync {
     fn invalidate_namespace(&self, ns: &str) {
         let _ = ns;
     }
+
+    /// Current generation counter for `ns` — callers that embed the
+    /// generation in their cache keys must read it through this method so
+    /// key construction and `invalidate_namespace` bumps stay on the same
+    /// counter. Stores without generations return 0.
+    fn namespace_generation(&self, ns: &str) -> u64 {
+        let _ = ns;
+        0
+    }
 }

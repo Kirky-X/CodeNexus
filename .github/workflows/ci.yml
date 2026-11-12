@@ -196,6 +196,40 @@ jobs:
             cargo fuzz run "$t" --target x86_64-unknown-linux-gnu -- -runs=2000 -max_total_time=60
           done
 
+  feature-surface:
+    name: trait-kit feature-surface snapshot gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust 1.97.1 (declared MSRV)
+        run: |
+          # Mirror ci-lint's pinned toolchain install (rustup script, not the
+          # dtolnay action — see memory: single-tag force-push history).
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+      - name: trait-kit resolve-face snapshot (T014 gate)
+        run: |
+          # The SDK layer is the ONLY member allowed to declare trait-kit as a
+          # direct dependency, and the resolve face is SNAPSHOT-GATED: the
+          # anchor file records the exact feature set; any widening is a
+          # supply-chain surface change that requires review + re-snapshot.
+          # (trait-kit's internal feature cross-deps expand the resolved set
+          # beyond the 5 declared features — the snapshot captures reality.)
+          rg -n 'trait-kit' --glob '*/Cargo.toml' --glob '!Cargo.toml' \
+            && { echo "a workspace member declares trait-kit directly"; exit 1; } \
+            || true
+          cargo tree --locked -e features -i trait-kit --depth 1 > /tmp/face.txt
+          diff docs/ci/trait-kit-feature-face.txt /tmp/face.txt \
+            || { echo "trait-kit feature face drifted; re-snapshot with review"; exit 1; }
+          # The 5 declared features must never be dropped from the root manifest.
+          for f in async lifecycle health report shutdown; do
+            grep -q "\\$f\b" Cargo.toml || { echo "declared feature $f missing"; exit 1; }
+          done
+
   security:
     name: cargo-audit + cargo-deny
     runs-on: ubuntu-latest

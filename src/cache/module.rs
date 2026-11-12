@@ -294,23 +294,11 @@ impl OxcacheStore {
     /// TTL/eviction) without requiring backend-side key enumeration, which
     /// oxcache does not expose synchronously.
     fn generation(&self, ns: &str) -> u64 {
-        self.inner
-            .get_bytes_sync(&format!("__gen__:{ns}"))
-            .ok()
-            .flatten()
-            .and_then(|b| String::from_utf8(b).ok())
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0)
+        Self::shared_generation(ns)
     }
 
     fn bump_generation(&self, ns: &str) {
-        let next = self.generation(ns).wrapping_add(1).to_string();
-        if let Err(e) = self
-            .inner
-            .set_bytes_sync(&format!("__gen__:{ns}"), next.into_bytes(), None)
-        {
-            tracing::warn!(ns = %ns, error = %e, "cache generation bump failed");
-        }
+        Self::shared_bump_generation(ns);
     }
 
     /// Maps a logical key to its storage key, factoring in the namespace
@@ -332,6 +320,37 @@ impl OxcacheStore {
             if let Err(e) = svc.clear_sync() {
                 tracing::warn!(error = %e, "macro query cache invalidate failed");
             }
+        }
+    }
+}
+
+/// Process-level namespace generation counters (T012/F2/F3): intentionally
+/// NOT stored in the evictable cache — an evicted counter would silently
+/// reset to 0 and un-strand previously invalidated entries. Process-level
+/// sharing also makes same-DB reader/writer instances see each other's
+/// invalidation bumps (the macro registry itself is process-shared by
+/// first-registration-wins).
+static NS_GENERATIONS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, u64>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Non-instantiable namespace holder for the shared counter accessors.
+impl OxcacheStore {
+    /// Shared generation counter read for `ns`.
+    fn shared_generation(ns: &str) -> u64 {
+        NS_GENERATIONS
+            .lock()
+            .map(|map| map.get(ns).copied().unwrap_or(0))
+            .unwrap_or(0)
+    }
+
+    /// Shared generation counter bump for `ns` (read-modify-write under the
+    /// process lock; concurrent bumps coalesce benignly — extra invalidation
+    /// is harmless).
+    fn shared_bump_generation(ns: &str) {
+        if let Ok(mut map) = NS_GENERATIONS.lock() {
+            let next = map.get(ns).copied().unwrap_or(0).wrapping_add(1);
+            map.insert(ns.to_string(), next);
         }
     }
 }
@@ -386,6 +405,10 @@ impl CacheStore for OxcacheStore {
             // namespace's invalidation semantics.
             self.clear_macro_query_cache();
         }
+    }
+
+    fn namespace_generation(&self, ns: &str) -> u64 {
+        self.generation(ns)
     }
 }
 

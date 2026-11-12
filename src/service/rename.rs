@@ -20,7 +20,7 @@ use serde_json::Value;
 use crate::model::{Graph, Node, NodeId};
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
-use crate::service::error::{kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
+use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(feature = "cli")]
 use crate::service::runtime::nexus;
 use crate::storage::schema::{escape_cypher_string, escape_identifier};
@@ -386,11 +386,9 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
         });
     }
 
-    let trace = nexus.trace().map_err(|e| match e {
-        crate::sdk::NexusError::Kit(err) => {
-            wrap_kit_error("Failed to resolve trace capability", err)
-        }
-    })?;
+    let trace = nexus
+        .trace()
+        .map_err(|e| to_api_error(e.into(), "trace_error"))?;
     let (graph, _truncated) =
         trace
             .load_graph(&from, 2, MAX_SUBGRAPH_NODES)

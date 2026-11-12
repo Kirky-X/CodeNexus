@@ -86,8 +86,13 @@ pub mod parse;
 pub mod query;
 #[doc(hidden)]
 pub mod resolve;
-/// `Nexus` SDK facade over the assembled capability kit (internal shape for
-/// now — public commitment is deferred until `trait-kit` 0.5.0 final).
+/// `Nexus` SDK facade over the assembled capability kit.
+///
+/// Surface ruling (T014): kept as an INTERNAL, `#[doc(hidden)]` module —
+/// the public commitment is deferred until `trait-kit` 0.5.0 final, so the
+/// facade's API can still evolve without a semver promise. The enum is
+/// already self-owned (`NexusError` mirrors the kit taxonomy), so flipping
+/// this to the public preset later is a docs-only change.
 #[doc(hidden)]
 pub mod sdk;
 pub mod service;

@@ -276,7 +276,12 @@ impl IndexFacade {
             // cached Cypher results are stale — but `ast:` (content-hash
             // keyed) and `embed:` (content-addressed vectors) entries remain
             // valid and must survive an index run.
-            cache.invalidate_namespace("cypher");
+            // T012: same namespace string the query side embeds in its keys
+            // (`Nexus::query_cache_ns` reads this counter via
+            // `CacheStore::namespace_generation`) — bumping `cypher:{db}`
+            // strands this database's cached cypher results without
+            // touching another instance's namespace.
+            cache.invalidate_namespace(&format!("cypher:{}", self.db_path.display()));
         }
         Ok(result)
     }
@@ -394,7 +399,12 @@ impl IndexFacade {
             // cached Cypher results are stale — but `ast:` (content-hash
             // keyed) and `embed:` (content-addressed vectors) entries remain
             // valid and must survive an index run.
-            cache.invalidate_namespace("cypher");
+            // T012: same namespace string the query side embeds in its keys
+            // (`Nexus::query_cache_ns` reads this counter via
+            // `CacheStore::namespace_generation`) — bumping `cypher:{db}`
+            // strands this database's cached cypher results without
+            // touching another instance's namespace.
+            cache.invalidate_namespace(&format!("cypher:{}", self.db_path.display()));
         }
         Ok(result)
     }
@@ -2094,6 +2104,7 @@ mod tests {
 
         struct CountingCache {
             invalidates: AtomicU32,
+            expected_ns: String,
         }
         impl CacheStore for CountingCache {
             fn get(&self, _key: &str) -> Option<Vec<u8>> {
@@ -2106,7 +2117,10 @@ mod tests {
             // The index path invalidates only the `cypher` namespace —
             // content-addressed caches (`ast:`/`embed:`) survive index runs.
             fn invalidate_namespace(&self, ns: &str) {
-                assert_eq!(ns, "cypher", "index must invalidate the cypher namespace");
+                assert_eq!(
+                    ns, self.expected_ns,
+                    "index must invalidate this instance's cypher namespace"
+                );
                 self.invalidates.fetch_add(1, Ordering::SeqCst);
             }
         }
@@ -2116,6 +2130,8 @@ mod tests {
         let db_path = fresh_db_path();
         let cache = Arc::new(CountingCache {
             invalidates: AtomicU32::new(0),
+            // T012: instance-scoped namespace — `cypher:{db_path}`.
+            expected_ns: format!("cypher:{}", db_path.display()),
         });
         let facade = IndexFacade::new(&db_path)
             .expect("facade")
@@ -2347,6 +2363,7 @@ mod tests {
 
         struct CountingCache {
             invalidates: AtomicU32,
+            expected_ns: String,
         }
         impl CacheStore for CountingCache {
             fn get(&self, _key: &str) -> Option<Vec<u8>> {
@@ -2359,7 +2376,10 @@ mod tests {
             // The index path invalidates only the `cypher` namespace —
             // content-addressed caches (`ast:`/`embed:`) survive index runs.
             fn invalidate_namespace(&self, ns: &str) {
-                assert_eq!(ns, "cypher", "index must invalidate the cypher namespace");
+                assert_eq!(
+                    ns, self.expected_ns,
+                    "index must invalidate this instance's cypher namespace"
+                );
                 self.invalidates.fetch_add(1, Ordering::SeqCst);
             }
         }
@@ -2369,6 +2389,8 @@ mod tests {
         let db_path = fresh_db_path();
         let cache = Arc::new(CountingCache {
             invalidates: AtomicU32::new(0),
+            // T012: instance-scoped namespace — `cypher:{db_path}`.
+            expected_ns: format!("cypher:{}", db_path.display()),
         });
         let facade = IndexFacade::new(&db_path)
             .expect("facade")
