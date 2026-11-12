@@ -12,12 +12,16 @@ yanked = "deny"
 # 只加载该路径或 ~/.cargo/audit.toml，仓库根目录同名文件不会被读取）。
 # 约束：下方注释只允许出现被 ignore 的 RUSTSEC 编号（会被 grep 命中）。
 # 每条 ignore 必须带"复核日期"，到期重新评估是否仍需忽略。
-# 临时接受（最近复核 2026-10-31，基于 Cargo.lock 实锁版本）：
+# 临时接受（最近复核 2026-11-12，基于 Cargo.lock 实锁版本）：
 # - paste RUSTSEC-2024-0436 (unmaintained)：tokenizers 间接依赖（paste 1.0.15，
 #   vecboost 树仍在使用），无安全升级路径。复核：2026-12。
 # - number_prefix RUSTSEC-2025-0119 (unmaintained)：indicatif（vecboost
 #   进度条树）0.4.0 间接依赖，无安全升级路径。复核：2026-12，随 vecboost
 #   上游更换进度条或发布新版后复评。
+# - libsqlite3-sys RUSTSEC-2026-0459：C SQLite CVE-2026-119375，锁内实版
+#   0.37.0（经 sqlx-sqlite 0.9.0）；上游 sqlx-sqlite 0.9.0（最新）硬帽
+#   `libsqlite3-sys <0.38.0`，修复版 0.38.x 不可达（cargo update --precise
+#   实证）。sqlx 上游放宽后随升级一并移除。复核：2026-12。
 # 历史项复核结论（2026-10-16 移除）：cxx 与 event-listener 两条 unsound
 # advisory 的锁内实版均已达到各自 patched 下限，advisory 不再命中，对应
 # ignore 已删（编号见本文件 git 历史，注释约束不允许在此复述）。
@@ -26,6 +30,7 @@ yanked = "deny"
 ignore = [
     "RUSTSEC-2024-0436",
     "RUSTSEC-2025-0119",
+    "RUSTSEC-2026-0459",
 ]
 
 [licenses]
