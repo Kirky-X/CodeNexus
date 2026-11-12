@@ -17,7 +17,7 @@ fn nexus_for_db(db: &std::path::Path) -> Nexus {
     let config = KitBootstrapConfig::new(db.to_path_buf());
     tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(Nexus::open(config))
+        .block_on(Nexus::open(&config))
         .expect("Nexus::open")
 }
 
