@@ -3,6 +3,7 @@
 
 //! Index command: execute the full index pipeline.
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -53,45 +54,6 @@ impl From<IndexResult> for IndexOutput {
             duration_ms: r.duration_ms,
         }
     }
-}
-
-/// Maximum number of LSP providers that can be wired in [`build_lsp_providers`].
-///
-/// This const bounds the concurrency of [`start_active_providers_parallel`]:
-/// that function spawns one thread per active provider without a semaphore,
-/// relying on the bound being small (≤8) and LSP startup being IO-bound.
-/// Adding a 9th provider without raising this const would cause the assert
-/// in `build_lsp_providers` to fire.
-#[cfg(feature = "lsp")]
-const MAX_LSP_PROVIDERS: usize = 8;
-
-#[cfg(feature = "lsp")]
-fn build_lsp_providers() -> Vec<(&'static str, Box<dyn LspProvider>)> {
-    use crate::lsp::{
-        ClangdClient, FortlsClient, GoplsClient, JdtlsClient, PyrightClient, RustAnalyzerClient,
-        TypeScriptLanguageClient,
-    };
-
-    let providers: Vec<(&'static str, Box<dyn LspProvider>)> = vec![
-        ("rs", Box::new(RustAnalyzerClient::new())),
-        ("py", Box::new(PyrightClient::new())),
-        ("c", Box::new(ClangdClient::new())),
-        ("cpp", Box::new(ClangdClient::new())),
-        ("go", Box::new(GoplsClient::new())),
-        ("ts", Box::new(TypeScriptLanguageClient::new())),
-        ("f90", Box::new(FortlsClient::new())),
-        ("java", Box::new(JdtlsClient::new())),
-    ];
-    // Assert the semaphore-free bound expected by
-    // `start_active_providers_parallel`. Adding a new provider without
-    // raising MAX_LSP_PROVIDERS will trip this assert at startup.
-    assert!(
-        providers.len() <= MAX_LSP_PROVIDERS,
-        "MAX_LSP_PROVIDERS={} but {} providers wired; raise the const or remove a provider",
-        MAX_LSP_PROVIDERS,
-        providers.len()
-    );
-    providers
 }
 
 #[cfg(feature = "lsp")]
@@ -365,7 +327,7 @@ fn flush_semantic_type_batch<F>(
 /// # Concurrency bound
 ///
 /// No semaphore is used. At most 8 LSP providers can be active (rs, py, c,
-/// cpp, go, ts, f90, java — the wired set in [`build_lsp_providers`]). LSP
+/// cpp, go, ts, f90, java — the wired set in the LSP registry (`crate::lsp::registry`)). LSP
 /// startup is IO-bound (waiting on subprocess pipes for `initialize`/
 /// `initialized` handshake), so 8 threads on an 8-core host does not
 /// oversubscribe CPU. A semaphore would add complexity without benefit.
@@ -405,14 +367,14 @@ fn flush_semantic_type_batch<F>(
 /// safe by construction today.
 #[cfg(feature = "lsp")]
 fn start_active_providers_parallel(
-    providers: &[(&'static str, Box<dyn LspProvider>)],
+    providers: &[(&'static str, Arc<dyn LspProvider>)],
     active_exts: &std::collections::HashSet<&'static str>,
     workspace: &Path,
 ) -> u32 {
     use crate::lsp::LspError;
 
     // Collect references to (ext, provider) pairs that need starting.
-    // `&Box<dyn LspProvider>` coerces to `&dyn LspProvider`; the borrow is
+    // `&Arc<dyn LspProvider>` coerces to `&dyn LspProvider`; the borrow is
     // `Send` because `dyn LspProvider: Sync` (trait bound).
     let active: Vec<(&'static str, &dyn LspProvider)> = providers
         .iter()
@@ -629,7 +591,10 @@ fn enhance_with_lsp(
 ) -> Result<(), CodeNexusError> {
     use crate::lsp::LspError;
 
-    let providers = build_lsp_providers();
+    // Provider table + extension dispatch live in `crate::lsp::registry`
+    // (registration-only extensibility); the concurrency bound of
+    // `start_active_providers_parallel` derives from the registry length.
+    let providers = crate::lsp::registry::default_registry().providers();
 
     // L7-6: query Function/Method rows FIRST, then start only the LSP
     // providers whose extension appears in the result set. Pre-L7-6 started
@@ -1306,8 +1271,8 @@ mod tests {
 
     #[cfg(feature = "lsp")]
     #[test]
-    fn build_lsp_providers_returns_8_providers() {
-        let providers = build_lsp_providers();
+    fn default_registry_wires_8_providers() {
+        let providers = crate::lsp::registry::default_registry().providers();
         assert_eq!(providers.len(), 8);
         let exts: Vec<&str> = providers.iter().map(|(e, _)| *e).collect();
         assert!(exts.contains(&"rs"));
@@ -1336,14 +1301,14 @@ mod tests {
     fn select_provider_for_ext_returns_some_for_rs() {
         // P-02: select_provider_for_ext now does a HashMap lookup and
         // returns Option<&dyn LspProvider>. .rs must map to a provider.
-        let providers = build_lsp_providers();
+        let providers = crate::lsp::registry::default_registry().providers();
         let ext_map: std::collections::HashMap<&'static str, &dyn LspProvider> = providers
             .iter()
             .map(|(ext, p)| (*ext, p.as_ref()))
             .collect();
         let provider = select_provider_for_ext(&ext_map, "rs").expect("rs must map to a provider");
         let _ = provider.shutdown();
-        // Drop providers after shutdown to release the Box<dyn LspProvider>.
+        // Drop providers after shutdown to release the Arc<dyn LspProvider>.
         drop(providers);
     }
 
@@ -1354,7 +1319,7 @@ mod tests {
         // back to providers[0]. select_provider_for_ext returns None so the
         // hover loop skips the symbol — pre-M2 wasted 300 MB-2 GB of RSS
         // starting rust-analyzer for non-source files.
-        let providers = build_lsp_providers();
+        let providers = crate::lsp::registry::default_registry().providers();
         let ext_map: std::collections::HashMap<&'static str, &dyn LspProvider> = providers
             .iter()
             .map(|(ext, p)| (*ext, p.as_ref()))
@@ -2335,10 +2300,10 @@ mod tests {
         /// Provider vector type used by [`build_mock_providers`] (P-04 tests).
         ///
         /// Factored into a type alias to satisfy `clippy::type_complexity` —
-        /// the raw `(Vec<(&'static str, Box<dyn LspProvider>)>, Vec<Arc<AtomicU32>>)`
+        /// the raw `(Vec<(&'static str, Arc<dyn LspProvider>)>, Vec<Arc<AtomicU32>>)`
         /// form exceeds the default complexity threshold.
         type MockProvidersResult = (
-            Vec<(&'static str, Box<dyn LspProvider>)>,
+            Vec<(&'static str, Arc<dyn LspProvider>)>,
             Vec<Arc<AtomicU32>>,
         );
 
@@ -2349,19 +2314,19 @@ mod tests {
             // Static extension strings — required because the production
             // signature uses `&'static str`. Tests use a fixed set.
             const EXTS: [&str; 8] = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
-            let mut providers: Vec<(&'static str, Box<dyn LspProvider>)> = Vec::new();
+            let mut providers: Vec<(&'static str, Arc<dyn LspProvider>)> = Vec::new();
             let mut counts: Vec<Arc<AtomicU32>> = Vec::new();
             for (i, &delay) in delays_ms.iter().enumerate() {
                 let ext = EXTS[i];
                 let mock = MockLspProvider::new(delay);
                 counts.push(mock.start_count.clone());
-                providers.push((ext, Box::new(mock) as Box<dyn LspProvider>));
+                providers.push((ext, Arc::new(mock) as Arc<dyn LspProvider>));
             }
             // Pad to 8 if fewer were provided (unused extensions).
             while providers.len() < 8 {
                 let ext = EXTS[providers.len()];
                 let mock = MockLspProvider::new(0);
-                providers.push((ext, Box::new(mock) as Box<dyn LspProvider>));
+                providers.push((ext, Arc::new(mock) as Arc<dyn LspProvider>));
             }
             (providers, counts)
         }
@@ -2396,12 +2361,12 @@ mod tests {
             // provider and does not skip any.
             let delays = [10, 10, 10, 10, 10, 10, 10, 10];
             const EXTS: [&str; 8] = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
-            let mut providers: Vec<(&'static str, Box<dyn LspProvider>)> = Vec::new();
+            let mut providers: Vec<(&'static str, Arc<dyn LspProvider>)> = Vec::new();
             let mut counts: Vec<Arc<AtomicU32>> = Vec::new();
             for (i, &delay) in delays.iter().enumerate() {
                 let mock = MockLspProvider::new(delay);
                 counts.push(mock.start_count.clone());
-                providers.push((EXTS[i], Box::new(mock) as Box<dyn LspProvider>));
+                providers.push((EXTS[i], Arc::new(mock) as Arc<dyn LspProvider>));
             }
             let active_exts: std::collections::HashSet<&'static str> =
                 EXTS.iter().copied().collect();
@@ -2425,12 +2390,12 @@ mod tests {
             // P-04: providers whose extension is NOT in `active_exts` must
             // not be started. Verifies the filter step before scope spawn.
             const EXTS: [&str; 8] = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
-            let mut providers: Vec<(&'static str, Box<dyn LspProvider>)> = Vec::new();
+            let mut providers: Vec<(&'static str, Arc<dyn LspProvider>)> = Vec::new();
             let mut counts: Vec<Arc<AtomicU32>> = Vec::new();
             for ext in EXTS.iter() {
                 let mock = MockLspProvider::new(5);
                 counts.push(mock.start_count.clone());
-                providers.push((*ext, Box::new(mock) as Box<dyn LspProvider>));
+                providers.push((*ext, Arc::new(mock) as Arc<dyn LspProvider>));
             }
             // Only "rs" is active.
             let active_exts: std::collections::HashSet<&'static str> =
@@ -2461,7 +2426,7 @@ mod tests {
             // converted to a `LspError::ServerStart` message. The remaining
             // providers must still complete successfully.
             const EXTS: [&str; 8] = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
-            let mut providers: Vec<(&'static str, Box<dyn LspProvider>)> = Vec::new();
+            let mut providers: Vec<(&'static str, Arc<dyn LspProvider>)> = Vec::new();
             let mut counts: Vec<Arc<AtomicU32>> = Vec::new();
             for (i, ext) in EXTS.iter().enumerate() {
                 let mut mock = MockLspProvider::new(10);
@@ -2470,7 +2435,7 @@ mod tests {
                     mock = mock.with_panic();
                 }
                 counts.push(mock.start_count.clone());
-                providers.push((*ext, Box::new(mock) as Box<dyn LspProvider>));
+                providers.push((*ext, Arc::new(mock) as Arc<dyn LspProvider>));
             }
             let active_exts: std::collections::HashSet<&'static str> =
                 EXTS.iter().copied().collect();
@@ -2509,7 +2474,7 @@ mod tests {
             // P-04: a provider returning `Err(LspError::ServerStart)` must be
             // logged and skipped; the remaining providers must still complete.
             const EXTS: [&str; 8] = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
-            let mut providers: Vec<(&'static str, Box<dyn LspProvider>)> = Vec::new();
+            let mut providers: Vec<(&'static str, Arc<dyn LspProvider>)> = Vec::new();
             let mut counts: Vec<Arc<AtomicU32>> = Vec::new();
             for (i, ext) in EXTS.iter().enumerate() {
                 let mut mock = MockLspProvider::new(5);
@@ -2518,7 +2483,7 @@ mod tests {
                     mock = mock.with_failure();
                 }
                 counts.push(mock.start_count.clone());
-                providers.push((*ext, Box::new(mock) as Box<dyn LspProvider>));
+                providers.push((*ext, Arc::new(mock) as Arc<dyn LspProvider>));
             }
             let active_exts: std::collections::HashSet<&'static str> =
                 EXTS.iter().copied().collect();
@@ -2546,12 +2511,12 @@ mod tests {
             // P-04: empty active_exts must short-circuit without spawning
             // any threads (early return after filter).
             const EXTS: [&str; 8] = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
-            let mut providers: Vec<(&'static str, Box<dyn LspProvider>)> = Vec::new();
+            let mut providers: Vec<(&'static str, Arc<dyn LspProvider>)> = Vec::new();
             let mut counts: Vec<Arc<AtomicU32>> = Vec::new();
             for ext in EXTS.iter() {
                 let mock = MockLspProvider::new(5);
                 counts.push(mock.start_count.clone());
-                providers.push((*ext, Box::new(mock) as Box<dyn LspProvider>));
+                providers.push((*ext, Arc::new(mock) as Arc<dyn LspProvider>));
             }
             let active_exts: std::collections::HashSet<&'static str> =
                 std::collections::HashSet::new();

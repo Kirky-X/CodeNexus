@@ -19,10 +19,7 @@ use crate::service::error::to_api_error;
 use crate::service::error::CodeNexusError;
 
 #[cfg(feature = "lsp")]
-use crate::lsp::{
-    ClangdClient, FortlsClient, GoplsClient, JdtlsClient, LspError, LspProvider, PyrightClient,
-    RustAnalyzerClient, TypeScriptLanguageClient,
-};
+use crate::lsp::{LspError, LspProvider};
 #[cfg(feature = "cli")]
 use crate::service::error::wrap_error;
 
@@ -56,19 +53,24 @@ fn start_or_err(client: &dyn LspProvider, workspace: &Path) -> Result<(), CodeNe
     client.start(workspace).map_err(lsp_error_to_cli)
 }
 
-/// Selects an LSP client based on file extension.
+/// Selects an LSP client for `file` via the [`crate::lsp::LspRegistry`]
+/// capability — the extension dispatch lives in `src/lsp/registry.rs`
+/// (adding a provider is a registration change only).
+///
+/// Uncovered extensions are a typed error (no implicit default backend: the
+/// pre-registry match silently started rust-analyzer for any unknown
+/// extension).
 #[cfg(feature = "lsp")]
-fn select_provider(file: &Path) -> Box<dyn LspProvider> {
+fn select_provider(file: &Path) -> Result<std::sync::Arc<dyn LspProvider>, CodeNexusError> {
     let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
-    match ext {
-        "py" => Box::new(PyrightClient::new()),
-        "c" | "cpp" => Box::new(ClangdClient::new()),
-        "go" => Box::new(GoplsClient::new()),
-        "ts" => Box::new(TypeScriptLanguageClient::new()),
-        "f90" => Box::new(FortlsClient::new()),
-        "java" => Box::new(JdtlsClient::new()),
-        _ => Box::new(RustAnalyzerClient::new()),
-    }
+    crate::lsp::registry::default_registry()
+        .select(file)
+        .ok_or_else(|| {
+            CodeNexusError::InvalidInput(format!(
+                "no LSP provider registered for extension .{ext}; file: {}",
+                file.display()
+            ))
+        })
 }
 
 /// Prints a serializable value as JSON to stdout.
@@ -245,7 +247,7 @@ async fn lsp_goto_def(
     ensure_file_exists(&file_path).map_err(|e| to_api_error(e, "lsp_error"))?;
     let (line, col) = cli_to_lsp_position(line, col);
 
-    let client = select_provider(&file_path);
+    let client = select_provider(&file_path).map_err(|e| to_api_error(e, "lsp_error"))?;
     start_or_err(client.as_ref(), ws).map_err(|e| to_api_error(e, "lsp_error"))?;
 
     let result = client.definition(&file_path, line, col);
@@ -276,7 +278,7 @@ async fn lsp_hover(file: String, line: u32, col: u32, workspace: String) -> Resu
     ensure_file_exists(&file_path).map_err(|e| to_api_error(e, "lsp_error"))?;
     let (line, col) = cli_to_lsp_position(line, col);
 
-    let client = select_provider(&file_path);
+    let client = select_provider(&file_path).map_err(|e| to_api_error(e, "lsp_error"))?;
     start_or_err(client.as_ref(), ws).map_err(|e| to_api_error(e, "lsp_error"))?;
 
     let result = client.hover(&file_path, line, col);
@@ -516,7 +518,7 @@ mod tests {
         let ws = Path::new(workspace);
         let file_path = resolve_file(file, ws);
 
-        let client = select_provider(&file_path);
+        let client = select_provider(&file_path)?;
         start_or_err(client.as_ref(), ws)?;
 
         let result = client.definition(&file_path, line, col);
@@ -533,7 +535,7 @@ mod tests {
         let ws = Path::new(workspace);
         let file_path = resolve_file(file, ws);
 
-        let client = select_provider(&file_path);
+        let client = select_provider(&file_path)?;
         start_or_err(client.as_ref(), ws)?;
 
         let result = client.hover(&file_path, line, col);
@@ -557,15 +559,30 @@ mod tests {
     }
 
     #[test]
-    fn select_provider_rust_for_rs_files() {
-        let provider = select_provider(Path::new("/tmp/lib.rs"));
+    fn select_provider_hits_registered_backend_for_rs_files() {
+        let provider = select_provider(Path::new("/tmp/lib.rs")).expect("rs is wired");
         let _ = provider.shutdown();
     }
 
     #[test]
-    fn select_provider_pyright_for_py_files() {
-        let provider = select_provider(Path::new("/tmp/module.py"));
+    fn select_provider_hits_registered_backend_for_py_files() {
+        let provider = select_provider(Path::new("/tmp/module.py")).expect("py is wired");
         let _ = provider.shutdown();
+    }
+
+    #[test]
+    fn select_provider_errors_for_uncovered_extension() {
+        // The registry has no implicit default backend: uncovered extensions
+        // (e.g. .js) are a typed error instead of silently starting
+        // rust-analyzer.
+        let err = match select_provider(Path::new("/tmp/app.js")) {
+            Err(err) => err,
+            Ok(_) => panic!("js is not wired, must not select"),
+        };
+        assert!(
+            err.to_string().contains("no LSP provider registered"),
+            "error must name the registry miss: {err}"
+        );
     }
 
     // print_json
@@ -577,23 +594,25 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // select_provider: default cases
+    // select_provider: extension coverage
 
     #[test]
-    fn select_provider_defaults_to_rust_analyzer_for_no_extension() {
-        let provider = select_provider(Path::new("/tmp/Makefile"));
-        let _ = provider.shutdown();
-    }
-
-    #[test]
-    fn select_provider_defaults_to_rust_analyzer_for_js_files() {
-        let provider = select_provider(Path::new("/tmp/app.js"));
-        let _ = provider.shutdown();
+    fn select_provider_errors_for_extensionless_file() {
+        // Extensionless files have no registry entry — precise error, no
+        // implicit rust-analyzer fallback.
+        let err = match select_provider(Path::new("/tmp/Makefile")) {
+            Err(err) => err,
+            Ok(_) => panic!("extensionless files have no provider"),
+        };
+        assert!(
+            err.to_string().contains("no LSP provider registered"),
+            "error must name the registry miss: {err}"
+        );
     }
 
     #[test]
     fn select_provider_gopls_for_go_files() {
-        let provider = select_provider(Path::new("/tmp/main.go"));
+        let provider = select_provider(Path::new("/tmp/main.go")).expect("go is wired");
         let _ = provider.shutdown();
     }
 
@@ -617,7 +636,7 @@ mod tests {
 
     #[test]
     fn start_or_err_with_nonexistent_workspace_does_not_panic() {
-        let client = select_provider(Path::new("/tmp/test.rs"));
+        let client = select_provider(Path::new("/tmp/test.rs")).expect("rs is wired");
         let _ = start_or_err(client.as_ref(), Path::new("/nonexistent/workspace/xyz"));
         let _ = client.shutdown();
     }

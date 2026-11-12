@@ -313,6 +313,15 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
         kit.register_lifecycle::<CacheModule>();
     }
 
+    // 11. LSP registry (feature-gated) — extension → provider table as a kit
+    // capability. Leaf module (static table, no config); the DB-free lsp_*
+    // CLI commands and the indexing enrichment pass construct the same
+    // default registry directly via `crate::lsp::registry::default_registry`.
+    #[cfg(feature = "lsp")]
+    {
+        kit.register::<crate::lsp::LspRegistryModule>()?;
+    }
+
     // Health checkers for `status`'s `health_aggregate` sampling — without a
     // registered checker the aggregate stays empty regardless of module state.
     kit.register_health_check::<StorageModule>();
