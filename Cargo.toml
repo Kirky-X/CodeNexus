@@ -31,11 +31,12 @@ path = "src/main.rs"
 # `cn` 是 `codenexus` 的等形态别名命令（同一源、同一 CLI 面）。
 required-features = ["cli"]
 
-[[bin]]
-name = "codenexus-verify"
-path = "tools/verification/src/main.rs"
-# 未开 cli 时该 bin 无法编译（经 lib 的 `pub use sdforge` 取 clap）
-required-features = ["cli"]
+# 原 `[[bin]] codenexus-verify`（path=tools/verification/src/main.rs，违规
+# 自定义路径形态）已折叠为主 CLI 的 `verify` 子命令：实现整体迁入库侧
+# `src/verify/`（orchestrator + 统计/客户端/查询比对/报告/类型映射），
+# 入口经 sdforge inventory 注册（src/verify/mod.rs）。数据文件
+# （samples.json / type_map.json / queries/ / fetch_samples.sh）保留在
+# tools/verification/ 不动。
 
 [features]
 default = ["full"]

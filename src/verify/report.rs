@@ -16,10 +16,10 @@ use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::codenexus_stats::CodeNexusStats;
-use crate::gitnexus_client::GitnexusStats;
-use crate::query_compare::QueryDiff;
-use crate::type_map::{CanonicalType, TypeMap};
+use crate::verify::codenexus_stats::CodeNexusStats;
+use crate::verify::gitnexus_client::GitnexusStats;
+use crate::verify::query_compare::QueryDiff;
+use crate::verify::type_map::{CanonicalType, TypeMap};
 
 /// Per-severity counter.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -421,7 +421,7 @@ fn sum_counts_canonical_edge_gitnexus(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::type_map::TypeMap;
+    use crate::verify::type_map::TypeMap;
     use std::path::PathBuf;
 
     fn load_type_map() -> TypeMap {

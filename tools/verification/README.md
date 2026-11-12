@@ -22,14 +22,19 @@
 
 ## Quick Start
 
+> 2026-11-12：`codenexus-verify` 独立二进制已折叠为主 CLI 的 `verify` 子命令
+> （实现迁入库侧 `src/verify/`，`[[bin]]` 段删除）。以下命令以
+> `codenexus verify` 形态调用；参数与产物路径不变。
+
 ### Single sample
 
 ```sh
 # Index a repo with CodeNexus, fetch gitnexus reference, compare, report
-./target/debug/codenexus-verify single \
+./target/debug/codenexus verify --action single \
   --repo /home/dev/projects/velo \
   --name velo \
-  --language rust
+  --language rust \
+  --corpus tools/verification/samples.json --resume false --only "" --gitnexus_binary ""
 ```
 
 Outputs (in `tools/verification/results/`):
@@ -40,7 +45,8 @@ Outputs (in `tools/verification/results/`):
 ### Batch (all samples)
 
 ```sh
-./target/debug/codenexus-verify batch --corpus tools/verification/samples.json
+./target/debug/codenexus verify --action batch --corpus tools/verification/samples.json \
+  --repo "" --name "" --language "" --resume false --only "" --gitnexus_binary ""
 ```
 
 Generates `_aggregate.report.md` summarizing all samples.
@@ -50,7 +56,8 @@ Generates `_aggregate.report.md` summarizing all samples.
 ### Resume (skip re-indexing)
 
 ```sh
-./target/debug/codenexus-verify single --repo ... --name velo --language rust --resume
+./target/debug/codenexus verify --action single --repo ... --name velo --language rust \
+  --resume true --corpus "" --only "" --gitnexus_binary ""
 ```
 
 Loads existing `<name>.codenexus.json` instead of re-indexing. The gitnexus reference is always re-fetched.

@@ -241,7 +241,10 @@ fn run_cli() {
     // file (it does not create parent directories itself).
     // `webui` 自带数据扫描、不使用 Kit：跳过 DB 目录准备与 Kit 构建，避免在
     // 无索引目录里创建空库，也避免与持锁写入进程争用（见 src/viewer/cli.rs）。
-    let needs_kit = !(cfg!(feature = "webui") && sub_name == "webui");
+    // `verify` 同口径：single/batch 经子进程 `cargo run --bin codenexus`
+    // 自索引（release），统计经 Repository 直开 ./codenexus.lbug——
+    // 在宿主进程里构建 Kit 只会与子进程索引争锁、拖慢校验（见 src/verify）。
+    let needs_kit = !(cfg!(feature = "webui") && sub_name == "webui") && sub_name != "verify";
     if needs_kit {
         if let Some(parent) = PathBuf::from(&db).parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {

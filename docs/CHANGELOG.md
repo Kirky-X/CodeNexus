@@ -31,6 +31,10 @@ CodeNexus 的所有重要变更均记录于此文件。
 
 ## [Unreleased]
 
+### Changed
+
+- **refactor(cli): `codenexus-verify` 独立二进制折叠为主 CLI `verify` 子命令** — 原 `[[bin]] codenexus-verify`（`tools/verification/src/main.rs` 自定义路径形态）删除，实现整体迁入库侧 `src/verify/`（orchestrator + 统计/gitnexus 客户端/查询比对/报告/类型映射五模块），入口经 sdforge inventory 注册（`codenexus verify <single|batch|fetch-samples>`）。功能等价：索引自举（子进程 `cargo run --bin codenexus -- index --release`）、`./codenexus.lbug` 直开、产物路径（`tools/verification/results/`、`samples.json`、`type_map.json`、`queries/*.cql`）不变；`--only` 逐项过滤改逗号分隔单参数（`--only a,b`），stderr 进度输出与错误语义不变，宿主进程为 `verify` 跳过 Kit 构建（同 `webui` 口径，避免与子进程索引争锁）。数据文件保留在 `tools/verification/` 不动。
+
 ### Added
 
 - **feat(cli): `context --budget` 与 `daemon --notify-impact` 接线** — `context` 新增 `--budget <N>`（`Option<usize>`，省略即不裁剪，`0` 按参数错误 exit 2）：结果经 `service::budget` 截断并附带 `budget` receipt，未设预算时逐字节保持既有输出。`daemon` 新增 `--notify-impact`（缺省 false，同时接受 `--notify_impact` 与显式 `true`/`false`）：开启后在增量索引完成时注册 `impact_observer` 告警回调，关闭时行为与变更前一致。两处「能力存在但 CLI 不可达」的落差消除；README、README_EN 与 USER_GUIDE 同步参数说明。

@@ -8,105 +8,23 @@
 //! emits a Markdown diff report. See
 //! `openspec/changes/cross-validate-parsing-with-gitnexus/` for the full spec.
 
-mod codenexus_stats;
-mod gitnexus_client;
-mod query_compare;
-mod report;
-mod type_map;
-
 use anyhow::{Context, Result};
-use codenexus::sdforge::clap::{self, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 
-use query_compare::{QueryDiff, Side};
-use type_map::TypeMap;
-
-/// Cross-validate CodeNexus parsing against gitnexus reference indexes.
-#[derive(Parser, Debug)]
-#[command(name = "codenexus-verify", version, about)]
-struct Cli {
-    /// Path to the gitnexus binary. If omitted, searches PATH.
-    #[arg(long, global = true)]
-    gitnexus_binary: Option<PathBuf>,
-
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand, Debug)]
-enum Command {
-    /// Index a single repo with CodeNexus, fetch gitnexus reference, compare, report.
-    Single {
-        /// Path to the target repository root.
-        #[arg(long)]
-        repo: PathBuf,
-
-        /// Project name (used as the CodeNexus index key and gitnexus repo name).
-        #[arg(long)]
-        name: String,
-
-        /// Primary language of the repo (c / rust / fortran / python / typescript).
-        #[arg(long)]
-        language: String,
-
-        /// Skip CodeNexus indexing if results/<name>.codenexus.json already exists.
-        #[arg(long)]
-        resume: bool,
-    },
-
-    /// Run the full index-compare-report flow over every entry in a corpus JSON.
-    Batch {
-        /// Path to samples.json.
-        #[arg(long, default_value = "tools/verification/samples.json")]
-        corpus: PathBuf,
-
-        /// Skip CodeNexus indexing for samples that already have a results JSON.
-        #[arg(long)]
-        resume: bool,
-
-        /// Run only the named sample (repeatable).
-        #[arg(long = "only", action = clap::ArgAction::Append)]
-        only: Vec<String>,
-    },
-
-    /// Clone/checkout sample repos listed in samples.json.
-    FetchSamples {
-        /// Path to samples.json.
-        #[arg(long, default_value = "tools/verification/samples.json")]
-        corpus: PathBuf,
-    },
-}
-
-fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let gitnexus_binary = cli.gitnexus_binary.as_deref();
-    match cli.command {
-        Command::Single {
-            repo,
-            name,
-            language,
-            resume,
-        } => run_single_orchestrator(&repo, &name, &language, resume, gitnexus_binary),
-        Command::Batch {
-            corpus,
-            resume,
-            only,
-        } => run_batch(&corpus, resume, &only, gitnexus_binary),
-        Command::FetchSamples { corpus } => run_fetch_samples(&corpus),
-    }
-}
+use crate::verify::query_compare::{QueryDiff, Side};
+use crate::verify::type_map::TypeMap;
 
 /// CodeNexus DB path this tool indexes into and reads back from. Passed
 /// explicitly as `--db` to `codenexus index` (whose own default is
 /// `.codenexus/<project>.lbug`) so writer and readers always agree.
-const DEFAULT_DB: &str = "./codenexus.lbug";
+pub(crate) const DEFAULT_DB: &str = "./codenexus.lbug";
 
 /// Default type map path.
-const TYPE_MAP_PATH: &str = "tools/verification/type_map.json";
+pub(crate) const TYPE_MAP_PATH: &str = "tools/verification/type_map.json";
 
 /// Default queries directory.
-const QUERIES_DIR: &str = "tools/verification/queries";
+pub(crate) const QUERIES_DIR: &str = "tools/verification/queries";
 
 /// Full single-sample orchestrator.
 ///
@@ -115,7 +33,7 @@ const QUERIES_DIR: &str = "tools/verification/queries";
 /// - `results/<name>.codenexus.json`
 /// - `results/<name>.gitnexus.json`
 /// - `results/<name>.report.md`
-fn run_single_orchestrator(
+pub(crate) fn run_single_orchestrator(
     repo: &Path,
     name: &str,
     language: &str,
@@ -123,7 +41,7 @@ fn run_single_orchestrator(
     gitnexus_binary: Option<&Path>,
 ) -> Result<()> {
     // 1. CodeNexus side: index + extract + write codenexus.json
-    let codenexus_stats = codenexus_stats::run_single(repo, name, language, resume)?;
+    let codenexus_stats = crate::verify::codenexus_stats::run_single(repo, name, language, resume)?;
 
     // 2. gitnexus side: fetch reference + write gitnexus.json.
     //    When --resume is set and a previously-written reference JSON exists,
@@ -133,7 +51,7 @@ fn run_single_orchestrator(
     //    producer and the binary in PATH). Falls back to a fresh fetch
     //    when the JSON is absent so the default non-resume flow is unchanged.
     let gitnexus_stats = if resume {
-        match gitnexus_client::load_reference(name) {
+        match crate::verify::gitnexus_client::load_reference(name) {
             Ok(stats) => {
                 eprintln!("[resume] loaded gitnexus reference for `{name}` from disk");
                 stats
@@ -142,14 +60,14 @@ fn run_single_orchestrator(
                 eprintln!(
                     "[resume] no usable gitnexus reference for `{name}` ({e}); fetching fresh"
                 );
-                let stats = gitnexus_client::fetch_reference(name, gitnexus_binary)?;
-                let _ = gitnexus_client::write_reference(name, &stats)?;
+                let stats = crate::verify::gitnexus_client::fetch_reference(name, gitnexus_binary)?;
+                let _ = crate::verify::gitnexus_client::write_reference(name, &stats)?;
                 stats
             }
         }
     } else {
-        let stats = gitnexus_client::fetch_reference(name, gitnexus_binary)?;
-        let gn_path = gitnexus_client::write_reference(name, &stats)?;
+        let stats = crate::verify::gitnexus_client::fetch_reference(name, gitnexus_binary)?;
+        let gn_path = crate::verify::gitnexus_client::write_reference(name, &stats)?;
         eprintln!("[ok] wrote {gn_path:?}");
         stats
     };
@@ -161,14 +79,14 @@ fn run_single_orchestrator(
     let query_diffs = run_query_comparisons(name, gitnexus_binary)?;
 
     // 5. Generate + write report
-    let markdown = report::generate_report(
+    let markdown = crate::verify::report::generate_report(
         name,
         &codenexus_stats,
         &gitnexus_stats,
         &query_diffs,
         &type_map,
     );
-    let report_path = report::write_report(name, &markdown)?;
+    let report_path = crate::verify::report::write_report(name, &markdown)?;
     eprintln!("[ok] wrote {report_path:?}");
 
     let overall_pass = query_diffs
@@ -184,7 +102,7 @@ fn run_single_orchestrator(
 
 /// Execute all .cql files in the queries directory against both sides and
 /// collect the diffs.
-fn run_query_comparisons(
+pub(crate) fn run_query_comparisons(
     name: &str,
     gitnexus_binary: Option<&Path>,
 ) -> Result<Vec<(String, QueryDiff)>> {
@@ -194,9 +112,9 @@ fn run_query_comparisons(
     // Look up the CodeNexus project_id by name so CQL queries can filter
     // by `__PID__` to prevent cross-project data contamination (project
     // memory hard constraint).
-    let repo = codenexus::storage::repository::Repository::open(db_path)
+    let repo = crate::storage::repository::Repository::open(db_path)
         .with_context(|| format!("failed to open CodeNexus DB at {}", db_path.display()))?;
-    let project_id = codenexus_stats::lookup_project_id(repo.connection(), name)?;
+    let project_id = crate::verify::codenexus_stats::lookup_project_id(repo.connection(), name)?;
     eprintln!("[query] project '{name}' → id {project_id}");
 
     let mut cql_files: Vec<PathBuf> = std::fs::read_dir(queries_dir)
@@ -219,16 +137,22 @@ fn run_query_comparisons(
         let content = std::fs::read_to_string(cql_path)
             .with_context(|| format!("failed to read {}", cql_path.display()))?;
 
-        let cn_cql = query_compare::extract_query_for_side(&content, Side::Codenexus)?;
-        let gn_cql = query_compare::extract_query_for_side(&content, Side::Gitnexus)?;
+        let cn_cql =
+            crate::verify::query_compare::extract_query_for_side(&content, Side::Codenexus)?;
+        let gn_cql =
+            crate::verify::query_compare::extract_query_for_side(&content, Side::Gitnexus)?;
 
-        let cn_results =
-            query_compare::execute_codenexus_query(db_path, &cn_cql, Some(&project_id))
-                .with_context(|| format!("CodeNexus query failed for {query_name}"))?;
-        let gn_results = query_compare::execute_gitnexus_query(name, &gn_cql, gitnexus_binary)
-            .with_context(|| format!("gitnexus query failed for {query_name}"))?;
+        let cn_results = crate::verify::query_compare::execute_codenexus_query(
+            db_path,
+            &cn_cql,
+            Some(&project_id),
+        )
+        .with_context(|| format!("CodeNexus query failed for {query_name}"))?;
+        let gn_results =
+            crate::verify::query_compare::execute_gitnexus_query(name, &gn_cql, gitnexus_binary)
+                .with_context(|| format!("gitnexus query failed for {query_name}"))?;
 
-        let diff = query_compare::compare_query_results(&cn_results, &gn_results);
+        let diff = crate::verify::query_compare::compare_query_results(&cn_results, &gn_results);
         eprintln!(
             "  CodeNexus={}, gitnexus={}, diff={}",
             cn_results.len(),
@@ -251,7 +175,7 @@ fn run_query_comparisons(
 }
 
 /// Batch dispatcher (task 8.7).
-fn run_batch(
+pub(crate) fn run_batch(
     corpus: &PathBuf,
     resume: bool,
     only: &[String],
@@ -302,7 +226,7 @@ fn run_batch(
                     Path::new("tools/verification/results").join(format!("{name}.report.md"));
                 let severities = read_severity_counts(&report_path);
                 let overall_pass = severities.critical == 0;
-                summaries.push(report::SampleSummary {
+                summaries.push(crate::verify::report::SampleSummary {
                     name: name.to_string(),
                     language: language.to_string(),
                     overall_pass,
@@ -311,11 +235,11 @@ fn run_batch(
             }
             Err(e) => {
                 eprintln!("[error] {name} failed: {e:#}");
-                summaries.push(report::SampleSummary {
+                summaries.push(crate::verify::report::SampleSummary {
                     name: name.to_string(),
                     language: language.to_string(),
                     overall_pass: false,
-                    severities: report::SeverityCounts {
+                    severities: crate::verify::report::SeverityCounts {
                         critical: 1,
                         major: 0,
                         minor: 0,
@@ -325,14 +249,14 @@ fn run_batch(
         }
     }
 
-    let aggregate_md = report::generate_aggregate_report(&summaries);
-    let agg_path = report::write_aggregate_report(&aggregate_md)?;
+    let aggregate_md = crate::verify::report::generate_aggregate_report(&summaries);
+    let agg_path = crate::verify::report::write_aggregate_report(&aggregate_md)?;
     eprintln!("\n[done] aggregate report: {agg_path:?}");
     Ok(())
 }
 
 /// Read a per-sample report file and extract severity counts from the Summary table.
-fn read_severity_counts(report_path: &Path) -> report::SeverityCounts {
+pub(crate) fn read_severity_counts(report_path: &Path) -> crate::verify::report::SeverityCounts {
     let content = std::fs::read_to_string(report_path).unwrap_or_default();
     let mut critical = 0usize;
     let mut major = 0usize;
@@ -354,7 +278,7 @@ fn read_severity_counts(report_path: &Path) -> report::SeverityCounts {
             }
         }
     }
-    report::SeverityCounts {
+    crate::verify::report::SeverityCounts {
         critical,
         major,
         minor,
@@ -362,7 +286,7 @@ fn read_severity_counts(report_path: &Path) -> report::SeverityCounts {
 }
 
 /// Fetch-samples subcommand: delegates to the bash script.
-fn run_fetch_samples(corpus: &Path) -> Result<()> {
+pub(crate) fn run_fetch_samples(corpus: &Path) -> Result<()> {
     let script = Path::new("tools/verification/fetch_samples.sh");
     if !script.exists() {
         anyhow::bail!("fetch_samples.sh not found at {}", script.display());
@@ -381,41 +305,6 @@ fn run_fetch_samples(corpus: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn gitnexus_binary_flag_parses() {
-        let cli = Cli::parse_from([
-            "codenexus-verify",
-            "--gitnexus-binary",
-            "/usr/local/bin/gitnexus",
-            "single",
-            "--repo",
-            ".",
-            "--name",
-            "test",
-            "--language",
-            "rust",
-        ]);
-        assert_eq!(
-            cli.gitnexus_binary,
-            Some(PathBuf::from("/usr/local/bin/gitnexus"))
-        );
-    }
-
-    #[test]
-    fn gitnexus_binary_none_uses_path() {
-        let cli = Cli::parse_from([
-            "codenexus-verify",
-            "single",
-            "--repo",
-            ".",
-            "--name",
-            "test",
-            "--language",
-            "rust",
-        ]);
-        assert!(cli.gitnexus_binary.is_none());
-    }
 
     // read_severity_counts
 

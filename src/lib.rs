@@ -91,11 +91,13 @@ pub mod service;
 pub mod storage;
 #[doc(hidden)]
 pub mod trace;
+#[doc(hidden)]
+pub mod verify;
 
 pub use service::error::CodeNexusError;
 
-/// Re-export of [`sdforge`] so binary targets (e.g. `codenexus-verify`) can
-/// reuse `sdforge::clap` for CLI parsing without taking a direct `clap`
+/// Re-export of [`sdforge`] so the main binary's CLI surface can reuse
+/// `sdforge::clap` for CLI parsing without taking a direct `clap`
 /// dependency. Only available when the `cli` feature is enabled.
 #[cfg(feature = "cli")]
 pub use sdforge;

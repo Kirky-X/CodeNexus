@@ -4,7 +4,7 @@
 //! CodeNexus index invocation + stats extraction (tasks 3.1-3.4).
 //!
 //! - `run_index`: invoke `cargo run --bin codenexus -- index` via subprocess
-//! - `extract_stats`: open the LadybugDB with `codenexus::storage::Repository`,
+//! - `extract_stats`: open the LadybugDB with `crate::storage::Repository`,
 //!   run per-table `SELECT count(*)` for each of the 44 node types, and
 //!   `SELECT type, count(*) GROUP BY type` on CodeRelation for edge counts
 //! - `write_results`: serialize stats to `results/<name>.codenexus.json`
@@ -101,7 +101,7 @@ pub fn run_single(repo: &Path, name: &str, language: &str, resume: bool) -> Resu
         .with_context(|| format!("failed to create {}", results_dir.display()))?;
 
     let codenexus_json = results_dir.join(format!("{name}.codenexus.json"));
-    let db_path = Path::new(crate::DEFAULT_DB);
+    let db_path = Path::new(crate::verify::DEFAULT_DB);
 
     let stats = if resume && codenexus_json.exists() {
         eprintln!("[resume] loading existing {codenexus_json:?}");
@@ -134,7 +134,7 @@ pub fn run_single(repo: &Path, name: &str, language: &str, resume: bool) -> Resu
 /// returns an explicit error on non-zero exit (fail loud).
 ///
 /// **Explicit `--db`**: the CLI's own default is `.codenexus/<project>.lbug`
-/// (per-project), while this tool reads `crate::DEFAULT_DB`
+/// (per-project), while this tool reads `crate::verify::DEFAULT_DB`
 /// (`.codenexus.lbug` in the project root). The flag pins the index output to
 /// the path every reader below ([`extract_stats`], query comparison) opens —
 /// without it the index lands in a file nobody reads and stats silently come
@@ -155,7 +155,7 @@ pub fn run_index(repo_path: &Path, name: &str) -> Result<()> {
         "[index] codenexus index --path {} --name {} --db {} (release)",
         repo_path.display(),
         name,
-        crate::DEFAULT_DB
+        crate::verify::DEFAULT_DB
     );
     let output = Command::new("cargo")
         .args([
@@ -170,7 +170,7 @@ pub fn run_index(repo_path: &Path, name: &str) -> Result<()> {
             "--name",
             name,
             "--db",
-            crate::DEFAULT_DB,
+            crate::verify::DEFAULT_DB,
         ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -216,7 +216,7 @@ pub fn run_index(repo_path: &Path, name: &str) -> Result<()> {
 /// sledgehammer that destroyed other projects' indexes; this filter is the
 /// correct fix.
 pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
-    let repo = codenexus::storage::repository::Repository::open(db_path)
+    let repo = crate::storage::repository::Repository::open(db_path)
         .with_context(|| format!("failed to open CodeNexus DB at {}", db_path.display()))?;
     let conn = repo.connection();
 
@@ -225,8 +225,8 @@ pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
     let project_id = lookup_project_id(conn, name)?;
     eprintln!("[stats] project '{name}' → id {project_id}");
 
-    let escaped_pid = codenexus::storage::schema::escape_cypher_string(&project_id);
-    let escaped_name = codenexus::storage::schema::escape_cypher_string(name);
+    let escaped_pid = crate::storage::schema::escape_cypher_string(&project_id);
+    let escaped_name = crate::storage::schema::escape_cypher_string(name);
 
     let mut node_counts = BTreeMap::new();
     for table in NODE_TABLES {
@@ -235,7 +235,7 @@ pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
         // injection is not a concern. However, some table names (Macro,
         // Union) collide with LadybugDB reserved keywords and must be
         // backtick-escaped via `escape_identifier`.
-        let escaped_table = codenexus::storage::schema::escape_identifier(table);
+        let escaped_table = crate::storage::schema::escape_identifier(table);
         let cypher = if *table == "Project" {
             // Project table has no `project` column; filter by name instead.
             format!("MATCH (n:Project) WHERE n.name = '{escaped_name}' RETURN count(n) AS c")
@@ -311,11 +311,8 @@ pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
 /// step failed silently or the wrong DB was opened. We must NOT silently
 /// return zero counts — that would hide the failure behind plausible-looking
 /// numbers.
-pub fn lookup_project_id(
-    conn: &codenexus::storage::StorageConnection,
-    name: &str,
-) -> Result<String> {
-    let escaped = codenexus::storage::schema::escape_cypher_string(name);
+pub fn lookup_project_id(conn: &crate::storage::StorageConnection, name: &str) -> Result<String> {
+    let escaped = crate::storage::schema::escape_cypher_string(name);
     let cypher = format!("MATCH (p:Project) WHERE p.name = '{escaped}' RETURN p.id");
     let rows = conn
         .query(&cypher)
@@ -488,15 +485,12 @@ mod tests {
         // Covers the success branch of `lookup_project_id`.
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("pid.lbug");
-        let repo = codenexus::storage::repository::Repository::open(&db_path).unwrap();
-        let project = codenexus::model::Node::builder(
-            codenexus::model::NodeLabel::Project,
-            "sample-a",
-            "sample-a",
-        )
-        .id("uuid-7-a")
-        .build();
-        repo.save_nodes_stream(&[project], codenexus::model::NodeLabel::Project)
+        let repo = crate::storage::repository::Repository::open(&db_path).unwrap();
+        let project =
+            crate::model::Node::builder(crate::model::NodeLabel::Project, "sample-a", "sample-a")
+                .id("uuid-7-a")
+                .build();
+        repo.save_nodes_stream(&[project], crate::model::NodeLabel::Project)
             .unwrap();
         let conn = repo.connection();
         let id = lookup_project_id(conn, "sample-a").expect("lookup_project_id");
@@ -510,7 +504,7 @@ mod tests {
         // numbers. Covers the `ok_or_else` error branch.
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("pid-missing.lbug");
-        let repo = codenexus::storage::repository::Repository::open(&db_path).unwrap();
+        let repo = crate::storage::repository::Repository::open(&db_path).unwrap();
         let conn = repo.connection();
         let err = lookup_project_id(conn, "ghost").unwrap_err();
         assert!(
@@ -527,18 +521,16 @@ mod tests {
         // Covers the main loop body of `extract_stats`.
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("stats.lbug");
-        let repo = codenexus::storage::repository::Repository::open(&db_path).unwrap();
+        let repo = crate::storage::repository::Repository::open(&db_path).unwrap();
 
-        let alpha =
-            codenexus::model::Node::builder(codenexus::model::NodeLabel::Project, "alpha", "alpha")
-                .id("alpha-id")
-                .build();
-        let beta =
-            codenexus::model::Node::builder(codenexus::model::NodeLabel::Project, "beta", "beta")
-                .id("beta-id")
-                .build();
-        let f1 = codenexus::model::Node::builder(
-            codenexus::model::NodeLabel::Function,
+        let alpha = crate::model::Node::builder(crate::model::NodeLabel::Project, "alpha", "alpha")
+            .id("alpha-id")
+            .build();
+        let beta = crate::model::Node::builder(crate::model::NodeLabel::Project, "beta", "beta")
+            .id("beta-id")
+            .build();
+        let f1 = crate::model::Node::builder(
+            crate::model::NodeLabel::Function,
             "alpha_fn_a",
             "alpha::alpha_fn_a",
         )
@@ -548,8 +540,8 @@ mod tests {
         .start_line(1)
         .end_line(5)
         .build();
-        let f2 = codenexus::model::Node::builder(
-            codenexus::model::NodeLabel::Function,
+        let f2 = crate::model::Node::builder(
+            crate::model::NodeLabel::Function,
             "alpha_fn_b",
             "alpha::alpha_fn_b",
         )
@@ -559,8 +551,8 @@ mod tests {
         .start_line(7)
         .end_line(10)
         .build();
-        let f3 = codenexus::model::Node::builder(
-            codenexus::model::NodeLabel::Function,
+        let f3 = crate::model::Node::builder(
+            crate::model::NodeLabel::Function,
             "beta_fn",
             "beta::beta_fn",
         )
@@ -570,9 +562,9 @@ mod tests {
         .start_line(1)
         .end_line(3)
         .build();
-        repo.save_nodes_stream(&[alpha, beta], codenexus::model::NodeLabel::Project)
+        repo.save_nodes_stream(&[alpha, beta], crate::model::NodeLabel::Project)
             .unwrap();
-        repo.save_nodes_stream(&[f1, f2, f3], codenexus::model::NodeLabel::Function)
+        repo.save_nodes_stream(&[f1, f2, f3], crate::model::NodeLabel::Function)
             .unwrap();
         drop(repo);
 
@@ -600,7 +592,7 @@ mod tests {
         // must propagate the error. Covers the `?` propagation.
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("empty-stats.lbug");
-        let _ = codenexus::storage::repository::Repository::open(&db_path).unwrap();
+        let _ = crate::storage::repository::Repository::open(&db_path).unwrap();
         let err = extract_stats(&db_path, "nonexistent").unwrap_err();
         assert!(
             err.to_string().contains("project 'nonexistent' not found"),

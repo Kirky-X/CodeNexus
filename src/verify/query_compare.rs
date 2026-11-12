@@ -27,7 +27,7 @@ use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::gitnexus_client;
+use crate::verify::gitnexus_client;
 
 /// Marker delimiting the CodeNexus variant in a `.cql` file.
 const CODENEXUS_MARKER: &str = "// === CODENEXUS ===";
@@ -111,11 +111,11 @@ pub fn execute_codenexus_query(
     cql: &str,
     project_id: Option<&str>,
 ) -> Result<Vec<(String, String)>> {
-    let repo = codenexus::storage::repository::Repository::open(db_path)
+    let repo = crate::storage::repository::Repository::open(db_path)
         .with_context(|| format!("failed to open CodeNexus DB at {}", db_path.display()))?;
     let final_cql = match project_id {
         Some(pid) => {
-            let escaped = codenexus::storage::schema::escape_cypher_string(pid);
+            let escaped = crate::storage::schema::escape_cypher_string(pid);
             cql.replace("__PID__", &escaped)
         }
         None => cql.to_string(),
@@ -423,13 +423,12 @@ LIMIT 50
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("cov.lbug");
         let repo =
-            codenexus::storage::repository::Repository::open(&db_path).expect("Repository::open");
+            crate::storage::repository::Repository::open(&db_path).expect("Repository::open");
         // Insert a Project node so we have something to query.
-        let project =
-            codenexus::model::Node::builder(codenexus::model::NodeLabel::Project, "demo", "demo")
-                .id("proj-1")
-                .build();
-        repo.save_nodes_stream(&[project], codenexus::model::NodeLabel::Project)
+        let project = crate::model::Node::builder(crate::model::NodeLabel::Project, "demo", "demo")
+            .id("proj-1")
+            .build();
+        repo.save_nodes_stream(&[project], crate::model::NodeLabel::Project)
             .expect("save_nodes");
         drop(repo);
 
@@ -459,8 +458,7 @@ LIMIT 50
         // error). Covers the no-rows path of the row-mapping closure.
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("empty.lbug");
-        let _ =
-            codenexus::storage::repository::Repository::open(&db_path).expect("Repository::open");
+        let _ = crate::storage::repository::Repository::open(&db_path).expect("Repository::open");
         let cql = "MATCH (p:Project) RETURN p.name AS name, p.id AS id";
         let rows = execute_codenexus_query(&db_path, cql, None).expect("execute_codenexus_query");
         assert!(
@@ -477,15 +475,12 @@ LIMIT 50
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("null.lbug");
         let repo =
-            codenexus::storage::repository::Repository::open(&db_path).expect("Repository::open");
-        let project = codenexus::model::Node::builder(
-            codenexus::model::NodeLabel::Project,
-            "nullproj",
-            "nullproj",
-        )
-        .id("np-1")
-        .build();
-        repo.save_nodes_stream(&[project], codenexus::model::NodeLabel::Project)
+            crate::storage::repository::Repository::open(&db_path).expect("Repository::open");
+        let project =
+            crate::model::Node::builder(crate::model::NodeLabel::Project, "nullproj", "nullproj")
+                .id("np-1")
+                .build();
+        repo.save_nodes_stream(&[project], crate::model::NodeLabel::Project)
             .expect("save_nodes");
         drop(repo);
 
@@ -505,12 +500,12 @@ LIMIT 50
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("pid.lbug");
         let repo =
-            codenexus::storage::repository::Repository::open(&db_path).expect("Repository::open");
+            crate::storage::repository::Repository::open(&db_path).expect("Repository::open");
         let project =
-            codenexus::model::Node::builder(codenexus::model::NodeLabel::Project, "alpha", "alpha")
+            crate::model::Node::builder(crate::model::NodeLabel::Project, "alpha", "alpha")
                 .id("proj-alpha-id")
                 .build();
-        repo.save_nodes_stream(&[project], codenexus::model::NodeLabel::Project)
+        repo.save_nodes_stream(&[project], crate::model::NodeLabel::Project)
             .expect("save_nodes");
         drop(repo);
 
