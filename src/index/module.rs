@@ -102,7 +102,7 @@ impl AsyncAutoBuilder for IndexerModule {
             #[cfg(feature = "cache")]
             let cap = Self::build_cap_with_cache(&config, Some(cache));
             #[cfg(not(feature = "cache"))]
-            let cap = Self::build_cap_with_cache(&config, None);
+            let cap = Self::build_cap_with_cache(&config, ());
             cap
         })
     }
@@ -113,12 +113,15 @@ impl IndexerModule {
     ///
     /// Shared between [`AsyncAutoBuilder::build`] and tests. `cache` wires
     /// the namespace-scoped invalidation handoff (`IndexFacade::with_cache`)
-    /// — `None` in cache-feature-off builds.
+    /// — only present when the `cache` feature is on（与 `embed::module` 的
+    /// `build_cap` 同一门控惯例：off 时形参为 `()`）.
     pub(crate) fn build_cap_with_cache(
         config: &IndexConfig,
-        cache: Option<Arc<dyn crate::cache::CacheStore>>,
+        #[cfg(feature = "cache")] cache: Option<Arc<dyn crate::cache::CacheStore>>,
+        #[cfg(not(feature = "cache"))] _cache: (),
     ) -> Result<Arc<dyn Indexer>, IndexError> {
         let facade = IndexFacade::new(&config.db_path)?;
+        #[cfg(feature = "cache")]
         let facade = match cache {
             Some(cache) => facade.with_cache(cache),
             None => facade,
