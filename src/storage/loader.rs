@@ -862,7 +862,7 @@ mod tests {
         let edge = Edge::builder("src/a\\b.rs", "tar\"get", EdgeType::Calls, "p")
             .start_line(1)
             .build();
-        let csv = write_edges_csv_to_string(&[edge.clone()]);
+        let csv = write_edges_csv_to_string(std::slice::from_ref(&edge));
         let data_row = csv.lines().nth(1).expect("one data row");
         let id_column = data_row.split('\t').next().expect("id column first");
         assert_eq!(edge_id(&edge), id_column);

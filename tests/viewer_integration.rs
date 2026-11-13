@@ -26,7 +26,7 @@ fn fixture_dir() -> (tempfile::TempDir, std::path::PathBuf) {
         .enumerate()
         .map(|(i, name)| {
             Node::builder(NodeLabel::Function, *name, format!("demo.{name}"))
-                .id(&format!("f{i}"))
+                .id(format!("f{i}"))
                 .project("demo")
                 .file_path("/src/main.rs")
                 .start_line(1)

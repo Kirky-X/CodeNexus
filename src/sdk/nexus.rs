@@ -530,6 +530,7 @@ impl Nexus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "daemon")]
     use crate::daemon::DaemonConfig;
 
     /// Assembles a full-feature kit over a throwaway DB and wraps it.
@@ -664,7 +665,7 @@ mod tests {
 
         let build = NexusError::from(KitError::BuildFailed {
             context: "storage open".to_string(),
-            source: Box::new(std::io::Error::new(std::io::ErrorKind::Other, "boom")),
+            source: Box::new(std::io::Error::other("boom")),
         });
         assert_eq!(build.kind(), NexusErrorKind::InitFailed);
         assert!(build.to_string().contains("boom"), "source text survives");
@@ -684,7 +685,7 @@ mod tests {
         fn fresh_boxed_source() -> Box<dyn std::error::Error + Send + 'static> {
             Box::new(std::io::Error::other("boom"))
         }
-        let source = fresh_boxed_source();
+        let _source = fresh_boxed_source();
         let cases: Vec<(&'static str, KitError, NexusError, NexusErrorKind, bool)> = vec![
             (
                 "cycle",

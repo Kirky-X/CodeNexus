@@ -189,16 +189,28 @@ mod tests {
 
     #[test]
     fn build_returns_send_sync_capability() {
-        let cap = IndexerModule::build_cap_with_cache(&IndexConfig::in_memory(), None)
-            .expect("build_cap");
+        let cap = IndexerModule::build_cap_with_cache(
+            &IndexConfig::in_memory(),
+            #[cfg(feature = "cache")]
+            None,
+            #[cfg(not(feature = "cache"))]
+            (),
+        )
+        .expect("build_cap");
         fn _assert_send_sync<T: Send + Sync>(_: &T) {}
         _assert_send_sync(&cap);
     }
 
     #[test]
     fn capability_index_empty_dir_returns_zero_files() {
-        let cap = IndexerModule::build_cap_with_cache(&IndexConfig::in_memory(), None)
-            .expect("build_cap");
+        let cap = IndexerModule::build_cap_with_cache(
+            &IndexConfig::in_memory(),
+            #[cfg(feature = "cache")]
+            None,
+            #[cfg(not(feature = "cache"))]
+            (),
+        )
+        .expect("build_cap");
         let tmp = TempDir::new().unwrap();
         let result = cap.index(tmp.path(), "empty", false).expect("index");
         assert_eq!(result.files_indexed, 0, "empty dir → 0 files indexed");
@@ -209,8 +221,14 @@ mod tests {
     #[cfg(feature = "lang-rust")]
     #[test]
     fn capability_index_real_files_creates_nodes() {
-        let cap = IndexerModule::build_cap_with_cache(&IndexConfig::in_memory(), None)
-            .expect("build_cap");
+        let cap = IndexerModule::build_cap_with_cache(
+            &IndexConfig::in_memory(),
+            #[cfg(feature = "cache")]
+            None,
+            #[cfg(not(feature = "cache"))]
+            (),
+        )
+        .expect("build_cap");
         let tmp = TempDir::new().unwrap();
         write_file(
             tmp.path(),
@@ -226,8 +244,14 @@ mod tests {
 
     #[test]
     fn capability_path_not_found_returns_error() {
-        let cap = IndexerModule::build_cap_with_cache(&IndexConfig::in_memory(), None)
-            .expect("build_cap");
+        let cap = IndexerModule::build_cap_with_cache(
+            &IndexConfig::in_memory(),
+            #[cfg(feature = "cache")]
+            None,
+            #[cfg(not(feature = "cache"))]
+            (),
+        )
+        .expect("build_cap");
         let result = cap.index(Path::new("/nonexistent/path/xyz"), "demo", false);
         assert!(result.is_err(), "path not found should error");
         let err = result.unwrap_err();
@@ -266,8 +290,14 @@ mod tests {
     /// `index_incremental` on an empty directory returns zero files indexed.
     #[test]
     fn capability_index_incremental_empty_dir_returns_zero_files() {
-        let cap = IndexerModule::build_cap_with_cache(&IndexConfig::in_memory(), None)
-            .expect("build_cap");
+        let cap = IndexerModule::build_cap_with_cache(
+            &IndexConfig::in_memory(),
+            #[cfg(feature = "cache")]
+            None,
+            #[cfg(not(feature = "cache"))]
+            (),
+        )
+        .expect("build_cap");
         let tmp = TempDir::new().unwrap();
         let result = cap
             .index_incremental(tmp.path(), "empty", false)

@@ -143,6 +143,9 @@ mod tests {
 
     /// `verify` 子命令必须经 `#[forge(cli = true)]` 注册进 inventory，
     /// 与主 CLI 的 dispatch 查找面一致（原独立 bin 无此契约）。
+    // 注册面只在 cli/mcp 特性下存在（sdforge::inventory::cli 门控），
+    // minimal 腿不编译这两个守卫。
+    #[cfg(any(feature = "cli", feature = "mcp"))]
     #[test]
     fn verify_command_registered_via_inventory() {
         let found = sdforge::inventory::iter::<sdforge::cli::CliHandlerRegistration>()
@@ -152,6 +155,9 @@ mod tests {
 
     /// 参数面等价性守卫：`verify` 注册必须携带全部原独立入口的参数
     /// （action/repo/name/language/corpus/resume/only/gitnexus_binary）。
+    // 注册面只在 cli/mcp 特性下存在（sdforge::inventory::cli 门控），
+    // minimal 腿不编译这两个守卫。
+    #[cfg(any(feature = "cli", feature = "mcp"))]
     #[test]
     fn verify_registration_carries_all_parameters() {
         let reg = sdforge::inventory::iter::<sdforge::cli::CliCommandRegistration>()

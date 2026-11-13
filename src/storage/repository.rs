@@ -1202,8 +1202,12 @@ mod tests {
         let e1_id =
             crate::storage::loader::edge_id(&sample_edge("a", "b", EdgeType::Calls, 1, "demo"));
         // 同一 id 属于 demo；以其他 project 名删除必须不动它（防御性谓词）
-        Repository::delete_edges_by_ids_on(repo.connection(), &[e1_id.clone()], "other")
-            .expect("scoped delete");
+        Repository::delete_edges_by_ids_on(
+            repo.connection(),
+            std::slice::from_ref(&e1_id),
+            "other",
+        )
+        .expect("scoped delete");
         assert_eq!(
             edge_rows(&repo).len(),
             1,

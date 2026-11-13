@@ -622,7 +622,7 @@ pub fn run_read_symbol_source(
 
 /// CLI 参数 → 定位键（三键互斥；零键或双键给 usage 错误）。
 /// 空串 = 未提供（sdforge sentinel 默认值的 house 约定）。
-#[cfg(any(feature = "cli", feature = "mcp", test))]
+/// 纯函数不依赖 CLI 面：minimal 腿的测试同样覆盖。
 fn build_key_from_cli(
     qualified_name: &str,
     id: &str,
@@ -675,7 +675,7 @@ fn build_key_from_cli(
 /// CLI wrapper — `codenexus source`：JSON 输出（house 风格）。
 /// 可选参数经 main.rs `SENTINEL_DEFAULTS` 注入默认值（start/end_line 0 =
 /// 未提供；max_lines 0 = 默认 500）。
-#[cfg(any(feature = "cli", feature = "mcp", test))]
+#[cfg(any(feature = "cli", feature = "mcp"))]
 #[forge::log(args, err_detail)]
 #[forge(
     name = "source",
@@ -704,8 +704,8 @@ async fn source(
     Ok(())
 }
 
-/// CLI 数值参数 → [`SourceOptions`]（0 = 未提供/默认的 sentinel 约定）
-#[cfg(any(feature = "cli", feature = "mcp", test))]
+/// CLI 数值参数 → [`SourceOptions`]（0 = 未提供/默认的 sentinel 约定）。
+/// 纯函数不依赖 CLI 面：minimal 腿的测试同样覆盖。
 fn cli_options(start_line: u32, end_line: u32, max_lines: u32) -> SourceOptions {
     SourceOptions {
         window: if start_line == 0 {
@@ -1098,9 +1098,9 @@ mod tests {
             .unwrap()
             .join("freshness_escape_probe.rs");
         std::fs::write(&escape_target, "probe").expect("write escape target");
-        storage.execute(&format!(
-            "CREATE (:Function {{id: 'fn_esc', project: 'demo', name: 'esc_fn', qualifiedName: 'demo.esc_fn', filePath: '../freshness_escape_probe.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''}});",
-        ))
+        storage.execute(
+            "CREATE (:Function {id: 'fn_esc', project: 'demo', name: 'esc_fn', qualifiedName: 'demo.esc_fn', filePath: '../freshness_escape_probe.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});",
+        )
         .expect("create escaping function");
         let row = resolve_symbol(&*storage, &SymbolKey::QualifiedName("demo.esc_fn".into()))
             .expect("resolve");
