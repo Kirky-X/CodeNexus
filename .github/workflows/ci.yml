@@ -222,7 +222,9 @@ jobs:
           rg -n 'trait-kit' --glob '*/Cargo.toml' --glob '!Cargo.toml' \
             && { echo "a workspace member declares trait-kit directly"; exit 1; } \
             || true
-          cargo tree --locked -e features -i trait-kit --depth 1 > /tmp/face.txt
+          # --color never：workflow 全局 CARGO_TERM_COLOR=always 会让输出混入 ANSI
+          # 色码，快照逐行必炸（CI-only 假红，macOS 本地管道无色不可复现）。
+          cargo tree --locked --color never -e features -i trait-kit --depth 1 > /tmp/face.txt
           diff docs/ci/trait-kit-feature-face.txt /tmp/face.txt \
             || { echo "trait-kit feature face drifted; re-snapshot with review"; exit 1; }
           # The 5 declared features must never be dropped from the root manifest.
