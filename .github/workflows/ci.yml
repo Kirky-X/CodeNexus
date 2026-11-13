@@ -229,7 +229,10 @@ jobs:
             || { echo "trait-kit feature face drifted; re-snapshot with review"; exit 1; }
           # The 5 declared features must never be dropped from the root manifest.
           for f in async lifecycle health report shutdown; do
-            grep -q "\\$f\b" Cargo.toml || { echo "declared feature $f missing"; exit 1; }
+            # -w 词匹配替代 "\$f\b"：GNU grep 的 \s 是空白字符类，
+            # "\shutdown" 被解析成「空白+hutdown」在 CI 上必红（BSD grep 则字面量，
+            # 本地不可复现的 CI-only 假红）。
+            grep -qw "$f" Cargo.toml || { echo "declared feature $f missing"; exit 1; }
           done
 
   security:
