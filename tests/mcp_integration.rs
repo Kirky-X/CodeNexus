@@ -274,6 +274,8 @@ fn mcp_server_initializes_and_lists_tools() {
         "impact",
         "search",
         "context",
+        // Source reader exposed over MCP（cli/mcp 双面注册）。
+        "source",
         // Diagram pipeline exposed over MCP.
         "diagram",
         "arch_diff",

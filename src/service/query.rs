@@ -239,7 +239,7 @@ mod tests {
     #[test]
     #[serial_test::serial(kit_init)]
     fn index_run_through_capability_advances_query_generation() {
-        let (_dir, db) = fresh_db_path();
+        let (dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         crate::service::runtime::force_init_kit_for_testing(kit);
         let nexus = crate::sdk::Nexus::from_runtime().expect("kit");
@@ -253,8 +253,11 @@ mod tests {
         // indexer's pipeline carries the wired cache and bumps
         // `cypher:{db_path}` on success.
         let indexer = nexus.indexer().expect("indexer capability");
+        // 索引目标是本测试自己的临时目录：Linux runner 的 /tmp 含 root 属主的
+        // systemd-private 目录（000 权限），整扫 /tmp 会 Walk PermissionDenied。
+        // 本测试只断言「经生产能力的索引运行推进 generation」，目录内容无关。
         let output = indexer
-            .index(std::path::Path::new("/tmp"), "gen-probe-project", false)
+            .index(dir.path(), "gen-probe-project", false)
             .expect("index run");
         let _ = output;
 
