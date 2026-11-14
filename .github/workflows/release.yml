@@ -46,24 +46,34 @@ jobs:
         run: cargo build --release --lib
 
       # semver 预发布段（-rc.N 等）→ GitHub prerelease 标记；rc 不得抢占 Latest。
-      # 仅 tag 推送有版本串可派生；手动触发（分支 ref）不标记，维持原行为。
-      - name: Derive prerelease flag
-        id: meta
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          if [[ "$VERSION" == *-* ]]; then
-            echo "PRERELEASE=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
-          fi
-
+      # zizmor superfluous-actions（2026-11-14，zizmor 1.32 起该 finding 随
+      # SARIF 入 code-scanning）：action-gh-release 的能力 runner 自带 gh CLI
+      # 已覆盖，按 zizmor 建议换脚本步直建。行为对齐原 action：
+      # --generate-notes 对齐 generate_release_notes、draft 缺省即 false、
+      # semver 含预发布段时加 --prerelease。tag 推送与手动触发（workflow_dispatch）
+      # 均可派生 tag：dispatch 无版本 tag，按 sdforge 先例从 cargo metadata
+      # 的 crate 版本反推（v<version>）。幂等：release 已存在则跳过创建，
+      # 配合下方 uniqueness 断言重跑安全。PRERELEASE/TAG 均不经 template
+      # 直插 run 块（template-injection 向量，zizmor 告警 #8 同因）。
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
-        with:
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ steps.meta.outputs.PRERELEASE }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="v$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="codenexus") | .version')"
+          fi
+          VERSION="${TAG#v}"
+          ARGS=(--generate-notes)
+          if [[ "$VERSION" == *-* ]]; then
+            ARGS+=(--prerelease)
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release ${TAG} already exists; skip creation (idempotent)"
+            exit 0
+          fi
+          gh release create "$TAG" "${ARGS[@]}"
 
       # 注意:step 级 if 里取不到 secrets 上下文中的 secret,原写法恒为 false
       # 导致发布被静默跳过。现发布凭证由 OIDC auth-action 步提供,与 secret 无关。
