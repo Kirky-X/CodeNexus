@@ -33,7 +33,7 @@
 | 内容 | 说明 |
 |:-----|:-----|
 | **快速上手** | 5 分钟完成安装并索引第一个仓库 |
-| **高频命令** | 高频子命令的参数与示例（全量 37 个子命令以 `codenexus <cmd> --help` 为准） |
+| **高频命令** | 高频子命令的参数与示例（全量 39 个子命令以 `codenexus <cmd> --help` 为准） |
 | **深度分析** | 复杂度分析、死代码检测的指标与阈值 |
 | **智能体集成** | MCP 服务、setup 自动接入与 hook |
 
@@ -345,7 +345,7 @@ codenexus setup --force
 # 输出 PreToolUse/PostToolUse JSON（exit 0，永不阻塞，适合作为智能体钩子）
 codenexus hook
 
-# 启动 stdio MCP 服务（10 个工具：query/trace/impact/search/context/architecture/diagram/arch_diff/dead_code/detect_changes）
+# 启动 stdio MCP 服务（11 个工具：query/trace/impact/search/source/context/architecture/diagram/arch_diff/dead_code/detect_changes）
 codenexus mcp [--db <DB_PATH>]
 ```
 

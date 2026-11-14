@@ -25,7 +25,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 <td align="center" width="25%">⚡<br><b>Incremental pipeline</b><br><span style="color:#64748B">hash diffing · reparse only changes</span></td>
 <td align="center" width="25%">🕸️<br><b>Property graph</b><br><span style="color:#64748B">45 node types · 32 edge types · Cypher</span></td>
 <td align="center" width="25%">🧭<br><b>Multi-hop tracing</b><br><span style="color:#64748B">call chains · data flow · taint paths</span></td>
-<td align="center" width="25%">🔌<br><b>Dual entry</b><br><span style="color:#64748B">38 CLI commands + serve mode · 11 MCP tools</span></td>
+<td align="center" width="25%">🔌<br><b>Dual entry</b><br><span style="color:#64748B">39 CLI commands + serve mode · 11 MCP tools</span></td>
 </tr>
 </table>
 
@@ -109,7 +109,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 </tr>
 </table>
 
-Beyond the core capabilities above, CodeNexus also ships `context` assembly (`--budget <N>` caps the token budget; omitting it disables truncation), `detect_changes` change detection, `rename` rename-impact pre-checks, `ask` natural-language entry, `ci`/`lint` architecture gates, `taint` taint auditing, `supply` supply-chain view, `evolve` evolution replay, `hub` artifact client, `skill` skill sync, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of the 38 subcommands (plus the `mcp` serve mode) lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command Reference](docs/USER_GUIDE.md).
+Beyond the core capabilities above, CodeNexus also ships `context` assembly (`--budget <N>` caps the token budget; omitting it disables truncation), `detect_changes` change detection, `rename` rename-impact pre-checks, `ask` natural-language entry, `ci`/`lint` architecture gates, `taint` taint auditing, `supply` supply-chain view, `evolve` evolution replay, `hub` artifact client, `skill` skill sync, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of the 39 subcommands (plus the `mcp` serve mode) lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command Reference](docs/USER_GUIDE.md).
 
 ---
 
@@ -262,12 +262,12 @@ codenexus search --text "authentication logic" --fulltext true
 
 ## 🛠️ CLI Commands
 
-CodeNexus ships **38 subcommands** (plus the `codenexus mcp` serve mode), grouped by function:
+CodeNexus ships **39 subcommands** (plus the `codenexus mcp` serve mode), grouped by function:
 
 - **Indexing & project management**: `index` / `daemon` / `status` / `list` / `clean` / `export` / `import`
 - **Query & search**: `query` / `search` / `source` / `context`
 - **Tracing & impact analysis**: `trace` / `impact` / `detect_changes` / `rename`
-- **Analysis toolkit**: `dead_code` / `architecture` / `complexity` / `community` / `cross_service`
+- **Analysis toolkit**: `dead_code` / `architecture` / `complexity` / `community` / `cross_service` / `verify`
 - **API review & diagrams**: `route_map` / `shape_check` / `api_impact` / `tool_map` / `diagram` / `arch_diff`
 - **Security & gates**: `taint` / `supply` / `ci` / `lint`
 - **Artifacts & agent ecosystem**: `hub` / `skill` / `ask` / `evolve`

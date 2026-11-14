@@ -109,7 +109,7 @@
 </tr>
 </table>
 
-除上述核心能力外，CodeNexus 还提供 `context` 上下文组装（`--budget <N>` 控制 token 预算，省略时不裁剪）、`detect_changes` 变更检测、`rename` 重命名影响预检、`ask` 自然语言入口、`ci`/`lint` 架构门禁、`taint` 污点审计、`supply` 供应链视图、`evolve` 演化回放、`hub` 制品客户端、`skill` 技能同步、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 38 个子命令（外加 `mcp` 服务模式）的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
+除上述核心能力外，CodeNexus 还提供 `context` 上下文组装（`--budget <N>` 控制 token 预算，省略时不裁剪）、`detect_changes` 变更检测、`rename` 重命名影响预检、`ask` 自然语言入口、`ci`/`lint` 架构门禁、`taint` 污点审计、`supply` 供应链视图、`evolve` 演化回放、`hub` 制品客户端、`skill` 技能同步、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 39 个子命令（外加 `mcp` 服务模式）的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
 
 ---
 
@@ -261,12 +261,12 @@ codenexus search --text "authentication logic" --fulltext true
 
 ## 🛠️ CLI 命令
 
-CodeNexus 提供 **38 个子命令**（外加 `codenexus mcp` 服务模式），按功能分组：
+CodeNexus 提供 **39 个子命令**（外加 `codenexus mcp` 服务模式），按功能分组：
 
 - **索引与项目管理**：`index` / `daemon` / `status` / `list` / `clean` / `export` / `import`
 - **查询与搜索**：`query` / `search` / `source` / `context`
 - **追踪与影响分析**：`trace` / `impact` / `detect_changes` / `rename`
-- **分析工具包**：`dead_code` / `architecture` / `complexity` / `community` / `cross_service`
+- **分析工具包**：`dead_code` / `architecture` / `complexity` / `community` / `cross_service` / `verify`
 - **API 审查与架构图**：`route_map` / `shape_check` / `api_impact` / `tool_map` / `diagram` / `arch_diff`
 - **安全与门禁**：`taint` / `supply` / `ci` / `lint`
 - **制品与智能体生态**：`hub` / `skill` / `ask` / `evolve`

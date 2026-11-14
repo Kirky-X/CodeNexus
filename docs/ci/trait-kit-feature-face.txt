@@ -1,4 +1,4 @@
-trait-kit v0.5.0-rc.14
+trait-kit v0.5.0
 ├── trait-kit feature "async"
 ├── trait-kit feature "confers"
 ├── trait-kit feature "decorator"

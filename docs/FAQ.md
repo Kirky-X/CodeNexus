@@ -24,7 +24,7 @@
 | **多语言解析** | tree-sitter，默认 `full` 预设 22 种语言 |
 | **图存储** | LadybugDB，45 种节点类型 + 32 种边类型 |
 | **查询分析** | Cypher 子集查询、调用链/数据流追踪、影响分析、语义搜索 |
-| **智能体集成** | MCP 服务器（10 个工具）+ setup 自动接入 Claude Code / Cursor / Codex |
+| **智能体集成** | MCP 服务器（11 个工具）+ setup 自动接入 Claude Code / Cursor / Codex |
 
 **了解更多**：[用户指南](USER_GUIDE.md)。
 

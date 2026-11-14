@@ -46,7 +46,7 @@ Feature presets: `minimal` (Rust only), `core` (C+Rust+Python), `full` (all 22 t
 
 ## Command Quick Reference
 
-CodeNexus has **37 subcommands** (plus the `codenexus mcp` serve mode) grouped into functional areas. **All required flags and detailed output schemas are documented in [`references/commands.md`](references/commands.md).** Run `codenexus <command> --help` for the auto-generated flag list.
+CodeNexus has **39 subcommands** (plus the `codenexus mcp` serve mode) grouped into functional areas. **All required flags and detailed output schemas are documented in [`references/commands.md`](references/commands.md).** Run `codenexus <command> --help` for the auto-generated flag list.
 
 | Command | Area | One-line description |
 |---------|------|----------------------|
@@ -57,6 +57,7 @@ CodeNexus has **37 subcommands** (plus the `codenexus mcp` serve mode) grouped i
 | `daemon` | Indexing | Watch a directory recursively and incrementally re-index on file change. Long-running. |
 | `query` | Query | Execute a Cypher query. ADR-021 validator rejects destructive clauses at the CLI boundary. |
 | `search` | Query | Symbol search via `--text`+`--fulltext`+`--mode` (exact/regex/fuzzy/graph/multi) or BM25 full-text. No `--name` flag. ⚠️ See Known Issues. |
+| `source` | Query | Read the full source text of a span-bearing symbol via `--qualified-name`, `--id`, or `--file`+`--name` (mutually exclusive); optional `--start-line`/`--end-line` window and `--max-lines` cap (default 500). Hard error with a re-index hint when the file changed after indexing. |
 | `trace` | Tracing | Trace a symbol's call/dataflow paths with optional cycle detection and cross-service traversal (`--cross_service <BOOL>` is trace-only; walks `HTTP_CALLS` from `cross_service` plus reverse `HANDLES_ROUTE`). Unknown symbols return an empty `paths` list (exit 0). |
 | `impact` | Tracing | Reverse BFS to find all symbols that depend on a target. Flags: `--symbol`/`--depth`/`--edge_types`/`--max_depth`/`--include_tests`. Narrow `--edge_types` + `--max_depth` on large graphs. **No `--cross_service`** (that's `trace`-only). |
 | `context` | Tracing | 360° view of a symbol: callers/callees/processes/routes/endpoints. `--enhanced true` resolves `--project <name\|id>` and fails fast on ambiguous symbols (verified 0.3.5). |
@@ -71,6 +72,7 @@ CodeNexus has **37 subcommands** (plus the `codenexus mcp` serve mode) grouped i
 | `api_impact` | Analysis | Trace which callers would be affected by a given API endpoint change. |
 | `diagram` | Analysis | Render a self-contained interactive architecture HTML from the indexed graph. |
 | `arch_diff` | Analysis | Render an architecture diff HTML between two indexed project snapshots. |
+| `verify` | Analysis | Cross-validate CodeNexus parsing against gitnexus reference indexes (`single`/`batch`/`fetch-samples`; batch/single need the gitnexus binary). |
 | `detect_changes` | Refactoring | Run `git diff` and map touched files/lines to indexed symbols with risk classification. |
 | `rename` | Refactoring | Propose graph + text edits for renaming a symbol. Dry-run by default; `--apply true` writes to disk. |
 | `lsp_goto_def` | LSP | Query LSP Go-to-Definition at a file/line/col. Auto-detects language server. |
@@ -79,7 +81,7 @@ CodeNexus has **37 subcommands** (plus the `codenexus mcp` serve mode) grouped i
 | `import` | Team | Decompress a team artifact into LadybugDB. Optionally triggers an incremental reindex. |
 | `setup` | MCP | Auto-detect installed AI agents (Claude Code, Cursor, Codex) and write MCP config for `codenexus mcp`. |
 | `hook` | MCP | Emit PreToolUse/PostToolUse hook JSON. Always exits 0; never blocks. Long-running (reads stdin). |
-| `mcp` | MCP | Serve MCP tools (`query`/`trace`/`impact`/`search`/`context`/`architecture`/`diagram`/`arch_diff`/`dead_code`/`detect_changes`) over stdio. Long-running. Requires `mcp` feature. |
+| `mcp` | MCP | Serve MCP tools (`query`/`trace`/`impact`/`search`/`source`/`context`/`architecture`/`diagram`/`arch_diff`/`dead_code`/`detect_changes`) over stdio. Long-running. Requires `mcp` feature. |
 | `skill` | MCP | Sync bundled skill docs into installed agents' global skill dirs. Version-stamped; mirrors `setup` overwrite policy. |
 | `ask` | Agent | Natural-language router to the read-only command cores; executes in-process. |
 | `ci` | CI | Architecture gate: fail (exit 2) when the diff touches symbols at/above a risk level. Emits PR-ready markdown. |
@@ -104,7 +106,7 @@ Detailed documentation is split into supporting files that load on demand. The m
 
 | Reference | Contents |
 |-----------|----------|
-| [`references/commands.md`](references/commands.md) | Full flag list, options, output schemas, and notes for the documented subcommands (36 of 37; for `ci` and anything not covered, defer to `codenexus <cmd> --help`). |
+| [`references/commands.md`](references/commands.md) | Full flag list, options, output schemas, and notes for the documented subcommands (36 of 39; for `ci`, `source`, `verify`, and anything not covered, defer to `codenexus <cmd> --help`). |
 | [`references/storage-model.md`](references/storage-model.md) | `CodeRelation` NODE TABLE design, 45 node types, 32 edge types, confidence tiers. |
 | [`references/workflows.md`](references/workflows.md) | Nine end-to-end workflows: indexing, daemon, multi-project, FFI, refactoring, team artifacts, MCP, complexity audit, API surface. |
 | [`references/appendix.md`](references/appendix.md) | Supported languages (22), exit codes, full known-issues table, example programs. |

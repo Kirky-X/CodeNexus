@@ -9,7 +9,7 @@ CodeNexus 的所有重要变更均记录于此文件。
 
 ## 📋 目录
 
-- [Unreleased](#unreleased)
+- [0.4.0 — 2026-11-14](#040---2026-11-14)
 - [0.4.0-rc.2 — 2026-10-16](#040-rc2---2026-10-16)
 - [0.3.13-rc.1 — 2026-09-21](#0313-rc1---2026-09-21)
 - [0.3.12 — 2026-07-30](#0312---2026-07-30)
@@ -29,7 +29,7 @@ CodeNexus 的所有重要变更均记录于此文件。
 
 ---
 
-## [Unreleased]
+## [0.4.0] — 2026-11-14
 
 ### Changed
 
@@ -42,6 +42,8 @@ CodeNexus 的所有重要变更均记录于此文件。
 - **feat(parse): Swift 语言解析支持** — 新增 `lang-swift` feature（tree-sitter-swift 0.7）、`SwiftExtractor`（函数/方法、类/结构体/枚举/actor、协议、扩展、属性、构造器、类型别名、import、调用），`full` 预设语言数 21→22；用 apple/swift-argument-parser 与 Alamofire 两个真实 GitHub 仓库完成索引与图查询验证。
 
 ### Fixed
+
+- **docs: 发布对账——子命令与 MCP 工具计数校准（37→39 / 10→11）** — 以二进制实际注册面（`codenexus --help`，39 个子命令外加 `mcp` 服务模式）为准：`verify` 子命令与 `source` CLI/MCP 双面注册此前漏入各文档清单。README/README_EN 命令分组补 `verify` 并更计数 38→39；SKILL.md 快查表补 `source`/`verify` 两行、`mcp` 行工具清单补 `source`（11 工具）；commands.md 覆盖口径改「36 of 39（未覆盖 `ci`/`source`/`verify`）」；USER_GUIDE（39 子命令 / 11 工具）与 FAQ（11 工具）同步。
 
 - **fix(storage): 修复 Windows 上 `codenexus index` 必失败的四层平台差异** — LadybugDB 的写锁在 Windows 上是 `LockFileEx` 字节区间锁（归属文件句柄），同进程开第二个写句柄必然 `ERROR_LOCK_VIOLATION (33)`，而 Linux 的 `fcntl` 锁按进程计权——本仓无 Windows CI，这层差异从未暴露。① `StorageConnection` 改持 `Arc<Database>`，新增进程级弱引用句柄缓存（键 = 规范化路径 + 读写模式），同进程同路径复用同一句柄；`import` 替换库文件后显式作废缓存条目，避免把过期句柄递给重建索引的流水线。② 节点 id 内嵌 Windows 盘符冒号（`C:.Users...`），LadybugDB 会把 `C` 当成文件类型而报 `Cannot load from file type C`，CSV 临时文件名的清洗字符集补上 `:`。③ `probe_available_disk_space` 用带 `\?\` 逐字前缀的规范化路径与 `sysinfo` 挂载点比对，Windows 上恒为 0 导致 `max_db_size` 退化为 64 GiB 兜底，改为剥掉逐字前缀后按字符串前缀匹配。④ `signal_hook::consts::SIGUSR1` 与 `std::os::unix::fs::symlink` 两处 Unix 专属测试补 `#[cfg(unix)]`，此前 Windows 上测试套件根本编译不过。验证：Windows 上索引本仓 321 文件 / 21299 节点 / 113058 边成功（此前 `database is locked` 直接 exit 2），两进程同写一库时后写者 exit 2 且库不损坏；`cargo test --lib` Linux 4726 passed / 0 failed，clippy 0 warning；Windows 失败集与纯净 HEAD 基线一致（615 → 25，均为既有 Windows 缺口，新增 0 条）。
 
