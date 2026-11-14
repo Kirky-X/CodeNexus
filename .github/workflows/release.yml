@@ -84,12 +84,21 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          COUNT=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --jq "[.[] | select(.tag_name == \"${TAG}\")] | length")
-          echo "release objects for ${TAG}: ${COUNT}"
-          if [ "${COUNT}" != "1" ]; then
-            echo "::error::expected exactly 1 release for ${TAG}, found ${COUNT}; release state is not idempotent"
-            exit 1
-          fi
+          # gh release create 落库有最终一致性窗口：创建成功后立刻列表可能读
+          # 到 0（v0.4.0 attempt1 实录：19:11:24 创建返回 URL，19:11:26 列表
+          # 读 0 致 uniqueness 失败、publish 被跳过，--failed 重跑恢复）。
+          # 轮询 5 次 × 3s，读到 1 即过；持续非 1 才判失败。
+          COUNT=0
+          for i in 1 2 3 4 5; do
+            COUNT=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --jq "[.[] | select(.tag_name == \"${TAG}\")] | length")
+            echo "try${i}: release objects for ${TAG}: ${COUNT}"
+            if [ "${COUNT}" = "1" ]; then
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::expected exactly 1 release for ${TAG}, found ${COUNT} after 5 retries; release state is not idempotent"
+          exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
