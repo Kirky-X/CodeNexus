@@ -17,7 +17,7 @@
 - [Dead-code detection](#-dead-code-detection)
 - [API review toolkit](#-api-review-toolkit)
 - [Architecture diagrams & semantic Delta](#-architecture-diagrams--semantic-delta)
-- [Embedded Web UI (graph-viewer)](#-embedded-web-ui-graph-viewer)
+- [Embedded Web UI (graph-viewer)](#️-embedded-web-ui-graph-viewer)
 - [Multi-agent integration](#-multi-agent-integration)
 - [Environment variables](#-environment-variables)
 - [Configuration file](#️-configuration-file)

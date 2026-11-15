@@ -17,7 +17,7 @@
 - [死代码检测](#-死代码检测)
 - [API 审查工具包](#-api-审查工具包)
 - [架构图与语义 Delta](#-架构图与语义-delta)
-- [内嵌 Web UI（graph-viewer）](#-内嵌-web-ui-graph-viewer)
+- [内嵌 Web UI（graph-viewer）](#️-内嵌-web-uigraph-viewer)
 - [多智能体集成](#-多智能体集成)
 - [环境变量](#-环境变量)
 - [配置文件](#️-配置文件)

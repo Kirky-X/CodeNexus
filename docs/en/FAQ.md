@@ -93,7 +93,7 @@ codenexus query --cypher "MATCH (f:Function) RETURN f.name LIMIT 10"
 codenexus index --path ./myrepo --name myrepo --ram_first true
 ```
 
-Optional flags of frequently used commands **carry built-in defaults** (e.g. `trace --depth` defaults to 5, `search --limit` to 50, `impact --max_depth` to 0), so you never need placeholder flags like `--path_filter ""`; the full default list is in each command's `--help`. To pin parameters per project, use `.codenexus/config.json` (see the [User Guide · Configuration](USER_GUIDE.md#️-configuration)). The full conventions are in the [User Guide · Core conventions](USER_GUIDE.md#-core-conventions).
+Optional flags of frequently used commands **carry built-in defaults** (e.g. `trace --depth` defaults to 5, `search --limit` to 50, `impact --max_depth` to 0), so you never need placeholder flags like `--path_filter ""`; the full default list is in each command's `--help`. To pin parameters per project, use `.codenexus/config.json` (see the [User Guide · Configuration](USER_GUIDE.md#️-configuration-file)). The full conventions are in the [User Guide · Core conventions](USER_GUIDE.md#-core-conventions).
 
 ### ❓ Does `--project` take a project name or a project id?
 
@@ -105,7 +105,7 @@ Yes. All logs (including info level) go to stderr, and stdout carries only the c
 
 ### ❓ How do I find out why a command failed and what the exit code means?
 
-All errors funnel through `CodeNexusError` and map to stable exit codes: `0` success, `1` internal error, `2` invalid input / project not found / query error, `4` not found / database corrupt. Error output is a structured diagnostic receipt (stable rule code + evidence + fix wording). See the [API Reference · Error types](API_REFERENCE.md#-error-types-and-exit-codes).
+All errors funnel through `CodeNexusError` and map to stable exit codes: `0` success, `1` internal error, `2` invalid input / project not found / query error, `4` not found / database corrupt. Error output is a structured diagnostic receipt (stable rule code + evidence + fix wording). See the [API Reference · Error types](API_REFERENCE.md#-error-types--exit-codes).
 
 ### ❓ Which tools does MCP mode expose?
 
@@ -177,7 +177,7 @@ The ambiguity-resolution policy is "auto-select when there is exactly one match;
 
 ### ❓ Cypher query errors or unsupported syntax?
 
-Queries use a Cypher **subset** of LadybugDB: `UNION` / `UNION ALL` are supported (both branches must be valid on their own); label-disjunction expressions `WHERE (n:A OR n:B)` (labels belong in the `MATCH (n:A)` pattern) and write operations (`CREATE`/`DELETE`/`SET`/`MERGE`, which report `unsupported Cypher construct`) are not supported. Supported syntax is defined by what `query --cypher` actually accepts and by the [📘 API Reference](API_REFERENCE.md#queryfacade-query-and-search).
+Queries use a Cypher **subset** of LadybugDB: `UNION` / `UNION ALL` are supported (both branches must be valid on their own); label-disjunction expressions `WHERE (n:A OR n:B)` (labels belong in the `MATCH (n:A)` pattern) and write operations (`CREATE`/`DELETE`/`SET`/`MERGE`, which report `unsupported Cypher construct`) are not supported. Supported syntax is defined by what `query --cypher` actually accepts and by the [📘 API Reference](API_REFERENCE.md#queryfacade-query--search).
 
 ### ❓ How do I report a bug?
 
