@@ -26,6 +26,7 @@ CodeNexus 的所有重要变更均记录于此文件。
 - [0.3.1 — 2026-07-10](#031---2026-07-10)
 - [0.3.0 — 2026-07-10](#030---2026-07-10)
 - [0.1.0 — 2026-06-29](#010---2026-06-29)
+- [🗺️ 开发路线图](#️-开发路线图)
 
 ---
 
@@ -467,3 +468,31 @@ Initial public release. CodeNexus indexes source code into a queryable knowledge
 [0.3.1]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.0
 [0.1.0]: https://github.com/Kirky-X/codenexus/releases/tag/v0.1.0
+
+---
+
+## 🗺️ 开发路线图
+
+<details>
+<summary>📋 表格</summary>
+
+<table style="width:100%; border-collapse: collapse">
+<tr><th style="text-align:center">状态</th><th style="text-align:left">方向</th><th style="text-align:left">条目</th></tr>
+<tr><td align="center">✅</td><td>核心索引与图模型</td><td>v0.1.0 — 多语言索引（C/Rust/Fortran/Python/TypeScript）、图模式（45 种节点类型 + 32 种边类型）、<code>query</code>/<code>trace</code>/<code>impact</code>/<code>context</code>/<code>search</code>、增量索引、RAM 优先模式、MCP 服务、团队 <code>export</code>/<code>import</code>、守护进程模式、置信度分层、歧义消解</td></tr>
+<tr><td align="center">✅</td><td>稳定性与性能加固</td><td>v0.1.x — 增量重索引覆盖、大仓库内存调优、更多语言专属边提取</td></tr>
+<tr><td align="center">✅</td><td>LSP 增强</td><td>v0.2.0 — <code>lsp</code> feature：LSP 增强提取，超越 tree-sitter 的类型精确解析（rust-analyzer 集成）</td></tr>
+<tr><td align="center">✅</td><td>语言覆盖扩展</td><td>v0.2.0 — 扩展语言覆盖（Go、Java、C++，以及 JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog），由新的 <code>lang-*</code> feature 控制</td></tr>
+<tr><td align="center">✅</td><td>分析工具包</td><td>v0.2.0 — 死代码检测、架构概览、API 审查（route_map/shape_check/api_impact/tool_map）、社区检测、跨服务链接检测</td></tr>
+<tr><td align="center">✅</td><td>复杂度分析</td><td>v0.2.1 — AST 复杂度分析：圈/认知复杂度、嵌套深度、函数长度，绿/黄/红/致命四级告警</td></tr>
+<tr><td align="center">✅</td><td>MCP 服务器</td><td>v0.3.0 — sdforge-based MCP 服务器：<code>#[forge]</code> 宏 + sdforge <code>mcp</code> stdio 传输，替代手写 JSON-RPC；6 个工具（query/trace/impact/search/context/architecture）</td></tr>
+<tr><td align="center">✅</td><td>跨语言污点追踪</td><td>v0.3.2 — 跨语言数据流端到端追踪：<code>TaintPathTracer</code> BFS 遍历 DataFlows/Reads/Writes/FfiCalls 边</td></tr>
+<tr><td align="center">✅</td><td>语义搜索</td><td>v0.3.2 — 向量嵌入默认开启语义搜索（<code>embeddings</code> feature 已包含在 <code>full</code> 预设中）</td></tr>
+<tr><td align="center">✅</td><td>国际化</td><td>v0.3.3 — 国际化模块（<code>i18n</code> feature）：ICU4X Unicode case folding + NFC 规范化 + CJK 边界检测</td></tr>
+<tr><td align="center">✅</td><td>Harness 现代化</td><td>v0.3.3 — CI 升级 Rust 1.91 + 6 特性矩阵 + dependabot + codeql + crates.io 发布</td></tr>
+<tr><td align="center">✅</td><td>大仓库内存防线</td><td>v0.3.11 — 大型仓库索引 OOM 修复（L1–L7 七层防线）：<code>MemoryBudget</code> 三级内存压力 + <code>Graph::nodes_view/edges_view</code> 迭代器 + 流式 CSV + mpsc channel 并行解析 + L5 自适应降级 + L6 管线流式化（<code>ctx.remove</code> 取代 <code>Graph::clone</code>）+ L7 LadybugDB buffer_pool 封顶（4 GB）+ LSP 按需启动 + RAM-first 8× 放大因子预算。70 GB 主机峰值内存从 60 GB 降至 ~4 GB</td></tr>
+<tr><td align="center">✅</td><td>基础库升级</td><td>自研基础库升级至 crates.io RC（trait-kit 0.5.0-rc.9、sdforge / oxcache 0.5.0-rc.8、inklog 0.3.0-rc.9）；MSRV 1.97.1</td></tr>
+<tr><td align="center">✅</td><td>功能拓展波次（feature-expansion-wave）</td><td>2026-09 — RICE 排序的 12 项能力：token 预算器（`context --budget <N>` 控制 token 上限，省略时不裁剪）、<code>ci</code> 架构门禁（含官方 GitHub Action）、<code>lint</code> 自定义架构规则包、<code>skill</code> 技能同步、<code>ask</code> 自然语言入口、graph-viewer 快照合流（<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>）、daemon 影响告警（<code>daemon --notify-impact</code>）、Kotlin/Swift/Solidity 语言识别（扩展名映射与污点规则，tree-sitter 解析暂不支持）、<code>taint</code> 安全审计（内置 source/sink 规则库）、<code>supply</code> 供应链视图（ExternalPackage/DEPENDS_ON）、<code>evolve</code> 架构演化回放、<code>hub</code> 制品客户端（协议 v1）</td></tr>
+<tr><td align="center">✅</td><td>Web UI 与图可视化</td><td>v0.4.0-rc.2 — opt-in <code>webui</code> feature：<code>codenexus webui [--port]</code> 一条命令启动内嵌 3D graph-viewer（React + react-three-fiber 前端 <code>graph-viewer/dist</code> 编译期嵌入二进制；仅回环绑定 + <code>x-graph-token</code> + Host 校验）；<code>diagram</code>/<code>arch_diff</code> 交付架构图 HTML、语义 Delta 与 graph-viewer 快照合流（<code>--viewer_url</code>）。后续增强：更多图表类型与 diagram↔viewer 双向交互</td></tr>
+</table>
+
+</details>

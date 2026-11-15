@@ -260,7 +260,7 @@ bash tests/acceptance/run_acceptance.sh --clean
 
 ## ⏱️ 基准回归场景
 
-`benches/` 的 7 组 Criterion 基准承担性能回归守护（SLO 阈值表见 [`benches/README.md`](../benches/README.md)）：
+`benches/` 的 7 组 Criterion 基准承担性能回归守护（SLO 阈值表见 [`benches/README.md`](../../benches/README.md)）：
 
 | 基准 | 回归场景 |
 |------|----------|

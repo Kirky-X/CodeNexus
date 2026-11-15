@@ -1,6 +1,6 @@
 # ⚡ CodeNexus 性能指南
 
-本指南汇总 CodeNexus 的性能 SLO、基准套件、实测基线与内存优化设计。所有数字均来自仓库内 [`benches/README.md`](../benches/README.md) 记录的 criterion 实测或 CHANGELOG 记录的修复历史，未实测的指标明确标注 TBD。
+本指南汇总 CodeNexus 的性能 SLO、基准套件、实测基线与内存优化设计。所有数字均来自仓库内 [`benches/README.md`](../../benches/README.md) 记录的 criterion 实测或 CHANGELOG 记录的修复历史，未实测的指标明确标注 TBD。
 
 ## 📋 目录
 
@@ -17,7 +17,7 @@
 
 ## 🎯 概述与 SLO
 
-以下 SLO 为面向生产工作负载的验收参考，阈值全部来自 [`benches/README.md`](../benches/README.md) 的 SLO 阈值表（索引吞吐、增量单文件、查询延迟、追踪延迟、首次索引内存、daemon 持续内存为基准门禁项；增量批量变更 ≥ 100 files/s、daemon 响应 ≤ 3 s、事件队列零丢失为同表补充的验收项）：
+以下 SLO 为面向生产工作负载的验收参考，阈值全部来自 [`benches/README.md`](../../benches/README.md) 的 SLO 阈值表（索引吞吐、增量单文件、查询延迟、追踪延迟、首次索引内存、daemon 持续内存为基准门禁项；增量批量变更 ≥ 100 files/s、daemon 响应 ≤ 3 s、事件队列零丢失为同表补充的验收项）：
 
 | 维度 | SLO | 说明 |
 |:-----|:----|:-----|
@@ -46,7 +46,7 @@
 | `memory_bench.rs` | `memory` | `first_index_10k_files_peak`、`daemon_sustained_10_increments`、`ram_first_vs_default_comparison` | 峰值 / 持续 RSS |
 | `daemon_bench.rs`（`daemon`） | `daemon` | `debounce_response_latency`、`indexing_event_queue_throughput` | daemon 响应性 |
 
-> 完整的 SLO 阈值表、告警阈值与共享 fixture 说明见 [`benches/README.md`](../benches/README.md)。
+> 完整的 SLO 阈值表、告警阈值与共享 fixture 说明见 [`benches/README.md`](../../benches/README.md)。
 
 ---
 
@@ -133,7 +133,7 @@ codenexus index --path /path/to/project --name myproject --ram_first true
 
 ## 🧪 复现方法
 
-命令与 [`benches/README.md`](../benches/README.md) 一致：
+命令与 [`benches/README.md`](../../benches/README.md) 一致：
 
 ```sh
 # 快速模式（达到统计显著性即停止，CI 友好）
@@ -166,6 +166,6 @@ BENCH_RUN_IGNORED=1 cargo bench --bench memory_bench -- --quick
 
 | 文档 | 内容 |
 |------|------|
-| [benches/README.md](../benches/README.md) | SLO 阈值表、告警阈值、共享 fixture |
+| [benches/README.md](../../benches/README.md) | SLO 阈值表、告警阈值、共享 fixture |
 | [📖 用户指南](USER_GUIDE.md) | `--ram_first` / `--fresh` / daemon 的使用说明 |
 | [📋 更新日志](CHANGELOG.md) | L1–L7 与 P 系列优化的完整记录（v0.3.10–v0.3.12） |

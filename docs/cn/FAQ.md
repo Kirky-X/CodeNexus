@@ -61,7 +61,7 @@ cargo build --release --no-default-features --features core      # C + Rust + Py
 cargo build --release --no-default-features --features lang-c    # 仅 C
 ```
 
-完整 Feature 清单见 [README · Feature 开关](../README.md#-构建预设与-feature-开关)。
+完整 Feature 清单见 [用户指南 · Feature 开关](USER_GUIDE.md#-构建预设与-feature-开关)。
 
 ### ❓ `cargo install codenexus` 链接失败怎么办？
 
@@ -117,7 +117,7 @@ codenexus index --path ./myrepo --name myrepo --ram_first true
 
 ### ❓ 支持哪些语言？
 
-默认 `full` 预设 22 种：C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog、Swift。各语言提取的节点/边类型见 [README · 支持语言相关章节](../README.md#️-架构)。
+默认 `full` 预设 22 种：C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog、Swift。各语言提取的节点/边类型见 [README_CN · 支持语言相关章节](../../README_CN.md#️-架构)。
 
 ### ❓ 为什么死代码检测会误报？
 
@@ -153,7 +153,7 @@ RAM 优先模式把源码 LZ4 压缩进内存再单次批量入库，减少 Lady
 
 ### ❓ 查询/追踪性能有保证吗？
 
-性能 SLO（Cypher 查询 P99 ≤ 200 ms、追踪 P99 ≤ 500 ms，阈值见 [`benches/README.md`](../benches/README.md) SLO 阈值表）：Criterion 基准套件持续监控（`query_bench`、`trace_bench`），实测基线与复现方法见 [⚡ 性能指南](PERFORMANCE.md)。
+性能 SLO（Cypher 查询 P99 ≤ 200 ms、追踪 P99 ≤ 500 ms，阈值见 [`benches/README.md`](../../benches/README.md) SLO 阈值表）：Criterion 基准套件持续监控（`query_bench`、`trace_bench`），实测基线与复现方法见 [⚡ 性能指南](PERFORMANCE.md)。
 
 ### ❓ 索引越来越慢 / DB 文件越来越大怎么办？
 

@@ -23,6 +23,8 @@
 - [配置文件](#️-配置文件)
 - [故障排查](#-故障排查)
 - [延伸阅读](#-延伸阅读)
+- [构建预设与 Feature 开关](#-构建预设与-feature-开关)
+- [💻 示例](#-示例)
 
 ---
 
@@ -60,7 +62,7 @@ cargo install --path .
 | 磁盘空间 | 数据库默认写入 `<项目>/.codenexus/<项目名>.lbug`，随仓库规模增长 |
 | git | `detect_changes`、`diagram --repo_root` 源码证据等命令依赖 |
 
-构建预设：`minimal`（仅 Rust）/ `core`（C + Rust + Python）/ `full`（默认，22 语言 + 全部功能）。完整 Feature 清单见 [README · 构建预设与 Feature 开关](../README.md#-构建预设与-feature-开关)。
+构建预设：`minimal`（仅 Rust）/ `core`（C + Rust + Python）/ `full`（默认，22 语言 + 全部功能）。完整 Feature 清单见 [用户指南 · 构建预设与 Feature 开关](USER_GUIDE.md#-构建预设与-feature-开关)。
 
 ---
 
@@ -105,7 +107,7 @@ codenexus daemon --path . --name myproject --notify-impact
 
 ## 🧭 核心约定
 
-以下约定适用于所有子命令（与 [`skill/SKILL.md`](../skill/SKILL.md) 对 v0.4.0-rc.2 的校验一致）：
+以下约定适用于所有子命令（与 [`skill/SKILL.md`](../../skill/SKILL.md) 对 v0.4.0-rc.2 的校验一致）：
 
 - **无位置参数**。一切都是命名 flag：`codenexus query "MATCH ..."` 会失败，必须写 `codenexus query --cypher "MATCH ..."`。
 - **布尔参数显式传值**：`--force true`、`--fresh true`（仅 `index`）、`--apply true`、`--cross_service false`（仅 `trace`）、`--embed false`、`--ram_first false`、`--enhanced false`、`--include_tests false`（`impact`）。`daemon --notify-impact` 是例外：既可裸写（等价 `true`），也可显式传 `true`/`false`。
@@ -394,7 +396,7 @@ CodeNexus 支持 per-project 配置文件 `.codenexus/config.json`（与索引�
 
 ## ⚙️ 环境变量
 
-CodeNexus 是 CLI 工具，自身不读取 `.env` 文件；模板见 [`.env.example`](../.env.example)，供 shell / systemd / supervisord / docker / direnv 消费：
+CodeNexus 是 CLI 工具，自身不读取 `.env` 文件；模板见 [`.env.example`](../../.env.example)，供 shell / systemd / supervisord / docker / direnv 消费：
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
@@ -433,3 +435,120 @@ CodeNexus 是 CLI 工具，自身不读取 `.env` 文件；模板见 [`.env.exam
 | [⚡ 性能指南](PERFORMANCE.md) | 基准数据、内存优化与调优建议 |
 | [❓ FAQ](FAQ.md) | 常见问题解答 |
 | [🔒 安全文档](SECURITY.md) | 漏洞报告流程与安全最佳实践 |
+
+---
+
+## 🔧 构建预设与 Feature 开关
+
+**预设**：`default = ["full"]`
+
+<details>
+<summary>📋 表格</summary>
+
+| Feature           | 默认 | 说明 |
+| ----------------- | ---- | ---- |
+| `minimal`         | —    | 最小预设：仅 `lang-rust` |
+| `core`            | —    | 核心预设：`lang-c` + `lang-rust` + `lang-python` |
+| `full`            | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog/Swift + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embeddings/i18n/hub |
+| `lang-c`          | —    | C 语言解析器（tree-sitter-c） |
+| `lang-rust`       | 启用 | Rust 语言解析器（tree-sitter-rust） |
+| `lang-fortran`    | —    | Fortran 语言解析器（tree-sitter-fortran） |
+| `lang-python`     | —    | Python 语言解析器（tree-sitter-python） |
+| `lang-typescript` | —    | TypeScript 语言解析器（tree-sitter-typescript） |
+| `lang-go`         | —    | Go 语言解析器（tree-sitter-go） |
+| `lang-java`       | —    | Java 语言解析器（tree-sitter-java） |
+| `lang-cpp`        | —    | C++ 语言解析器（tree-sitter-cpp） |
+| `lang-javascript` | —    | JavaScript 语言解析器（tree-sitter-javascript） |
+| `lang-ruby`       | —    | Ruby 语言解析器（tree-sitter-ruby） |
+| `lang-haskell`    | —    | Haskell 语言解析器（tree-sitter-haskell） |
+| `lang-ocaml`      | —    | OCaml 语言解析器（tree-sitter-ocaml） |
+| `lang-scala`      | —    | Scala 语言解析器（tree-sitter-scala） |
+| `lang-php`        | —    | PHP 语言解析器（tree-sitter-php） |
+| `lang-csharp`     | —    | C# 语言解析器（tree-sitter-c-sharp） |
+| `lang-bash`       | —    | Bash 语言解析器（tree-sitter-bash） |
+| `lang-html`       | —    | HTML 语言解析器（tree-sitter-html） |
+| `lang-css`        | —    | CSS 语言解析器（tree-sitter-css） |
+| `lang-json`       | —    | JSON 语言解析器（tree-sitter-json） |
+| `lang-regex`      | —    | 正则语言解析器（tree-sitter-regex） |
+| `lang-verilog`    | —    | Verilog 语言解析器（tree-sitter-verilog） |
+| `lang-swift`      | —    | Swift 语言解析器（tree-sitter-swift） |
+| `daemon`          | 启用 | 文件监视守护进程（notify + notify-debouncer-full） |
+| `embeddings`      | 启用 | 向量嵌入语义搜索（reqwest HTTP + 本地 Candle 推理） |
+| `lsp`             | 启用 | LSP 增强解析（7 个 LSP 客户端） |
+| `analysis`        | 启用 | 死代码检测 + 架构概览（纯 Cypher 聚合） |
+| `complexity`      | 启用 | AST 复杂度分析（8 项指标，依赖 `analysis`） |
+| `api-review`      | 启用 | API 审查工具包（route_map/shape_check/api_impact/tool_map） |
+| `community`       | 启用 | 社区检测（Leiden 模块度优化，依赖 petgraph） |
+| `cross-service`   | 启用 | 跨服务调用链检测（HTTP 路由模式匹配） |
+| `diagram`         | 启用 | 架构图管线：`diagram`/`arch_diff` 命令（依赖 `analysis`） |
+| `mcp`             | 启用 | MCP 服务器（sdforge `mcp` stdio 传输） |
+| `cli`             | 启用 | CLI 二进制（sdforge `cli` 传输，二进制必需） |
+| `cache`           | 启用 | 查询结果缓存（oxcache） |
+| `i18n`            | 启用 | Unicode case folding + NFC 规范化（ICU4X） |
+| `webui`           | —    | 内嵌 graph-viewer Web UI：`codenexus webui` 启动（前端 `graph-viewer/dist` 资源编译期嵌入；opt-in，不入 `full`） |
+
+</details>
+
+> **日志系统**：inklog 是唯一日志后端（console + 文件 sink 日轮转 + 保留 30 天）；inklog 以 `default-features = false` 引入，默认（`full`）构建经 vecboost 的 `inklog/compression` 特性合并编译进 zstd 后端，`compress = true` 产生 zstd 压缩轮转文件；`minimal` 等不含 vecboost 的特性组合不编译任何压缩后端，压缩被跳过（告警后不产出压缩文件）。gzip（flate2）后端未启用。不再提供 tracing-subscriber 可选后端。
+
+```bash
+# 最小构建（仅 Rust，不含 daemon/analysis）
+cargo build --release --no-default-features --features minimal
+
+# 核心构建（C + Rust + Python）
+cargo build --release --no-default-features --features core
+
+# 单语言精简构建（例如仅 C）
+cargo build --release --no-default-features --features lang-c
+
+# 完整构建（默认，含所有语言 + 全部功能）
+cargo build --release
+
+# 含向量嵌入的构建
+cargo build --release --features embeddings
+```
+
+---
+
+## 💻 示例
+
+全部 14 个可运行示例位于 [`examples/`](../../examples/) 目录，每个示例对应一个 `cargo run --bin` 目标（经 `examples/Cargo.toml` 注册）：
+
+<details>
+<summary>📋 表格</summary>
+
+| 示例 | 文件 | 描述 |
+|------|------|------|
+| basic_indexing | `examples/src/bin/basic_indexing.rs` | 索引 Rust 源码到知识图谱，Cypher 查询函数列表 |
+| cypher_query | `examples/src/bin/cypher_query.rs` | 对图谱执行多种 Cypher 查询（按类型、按名称） |
+| symbol_search | `examples/src/bin/symbol_search.rs` | 按名称、类型搜索符号，处理空结果 |
+| call_tracing | `examples/src/bin/call_tracing.rs` | 正向追踪函数调用路径，构建调用图 |
+| impact_analysis | `examples/src/bin/impact_analysis.rs` | 分析修改某符号的影响半径（反向 BFS） |
+| symbol_context | `examples/src/bin/symbol_context.rs` | 符号 360° 视图：调用方 / 被调方 / 执行流，以及子图加载与符号消歧 |
+| export_import | `examples/src/bin/export_import.rs` | 图谱数据库的导出与导入验证 |
+| project_lifecycle | `examples/src/bin/project_lifecycle.rs` | 项目生命周期：索引多个项目 → 列出 → 按名解析 → 删除 |
+| code_analysis | `examples/src/bin/code_analysis.rs` | 代码质量分析三件套：复杂度 / 死代码 / 社区检测 |
+| api_surface | `examples/src/bin/api_surface.rs` | API/Web 服务面分析：路由表 / schema 校验 / API 影响 / 跨服务调用 / MCP 工具表 |
+| architecture_diagram | `examples/src/bin/architecture_diagram.rs` | 架构总览 + 自包含交互式架构图 HTML + 双项目架构 diff |
+| daemon_watch | `examples/src/bin/daemon_watch.rs` | 文件监视守护：`notify` 防抖 → 增量索引（Observer 模式）→ 优雅停止 |
+| git_integration | `examples/src/bin/git_integration.rs` | Git 集成：把 `git diff` 的变更行映射到受影响符号并做风险分级 |
+| setup_mcp | `examples/src/bin/setup_mcp.rs` | MCP 接入配置：自动探测已安装的 AI coding agent 并写入 MCP server 配置 |
+
+</details>
+
+<details>
+<summary>📄 代码 · bash</summary>
+
+```bash
+# 运行单个示例
+cargo run --manifest-path examples/Cargo.toml --bin basic_indexing
+
+# 运行所有示例
+for bin in basic_indexing cypher_query symbol_search call_tracing impact_analysis symbol_context export_import project_lifecycle code_analysis api_surface architecture_diagram daemon_watch git_integration setup_mcp; do
+  cargo run --manifest-path examples/Cargo.toml --bin $bin
+done
+```
+
+</details>
+
+示例通过 `IndexFacade` 索引源码、`QueryFacade` 执行查询、`TraceFacade` 追踪调用，退出时临时目录自动清理。库 API 的完整说明见 [📘 API 参考](API_REFERENCE.md)。

@@ -30,7 +30,7 @@
 | **Feature 门控** | 语言与可选能力均为独立 feature，未启用的代码不参与编译；至少需要一个 `lang-*` 或 `lsp` feature，否则编译期 `compile_error!` 报错 |
 | **失败显性化** | 错误类型统一收敛到 `CodeNexusError`，并映射到稳定的进程退出码 |
 
-> 完整特性清单与预设说明见 [README · 构建预设与 Feature 开关](../README.md#-构建预设与-feature-开关)。
+> 完整特性清单与预设说明见 [用户指南 · 构建预设与 Feature 开关](USER_GUIDE.md#-构建预设与-feature-开关)。
 
 ---
 
@@ -256,7 +256,7 @@ let opts = SourceOptions {
 
 ## 💡 使用示例
 
-改编自 [`examples/src/bin/basic_indexing.rs`](../examples/src/bin/basic_indexing.rs)：
+改编自 [`examples/src/bin/basic_indexing.rs`](../../examples/src/bin/basic_indexing.rs)：
 
 ```rust
 use codenexus::index::IndexFacade;
@@ -289,7 +289,7 @@ fn main() {
 }
 ```
 
-更多可运行示例见 `examples/` 目录（`cypher_query`、`symbol_search`、`call_tracing`、`impact_analysis`、`export_import`），运行方式见 [README · 示例](../README.md#-示例)。
+更多可运行示例见 `examples/` 目录（`cypher_query`、`symbol_search`、`call_tracing`、`impact_analysis`、`export_import`），运行方式见 [用户指南 · 示例](USER_GUIDE.md#-示例)。
 
 ---
 
