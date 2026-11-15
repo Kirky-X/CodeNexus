@@ -107,7 +107,7 @@ Every command outputs a single JSON object/array to stdout (except the streaming
 
 ## 🧭 Core conventions
 
-The following conventions apply to every subcommand (verified against v0.4.0-rc.2, matching [`skill/SKILL.md`](../../skill/SKILL.md)):
+The following conventions apply to every subcommand (verified against v0.4.0, matching [`skill/SKILL.md`](../../skill/SKILL.md)):
 
 - **No positional arguments**. Everything is a named flag: `codenexus query "MATCH ..."` fails; you must write `codenexus query --cypher "MATCH ..."`.
 - **Booleans take explicit values**: `--force true`, `--fresh true` (`index` only), `--apply true`, `--cross_service false` (`trace` only), `--embed false`, `--ram_first false`, `--enhanced false`, `--include_tests false` (`impact`). `daemon --notify-impact` is the exception: it can be written bare (equivalent to `true`) or take an explicit `true`/`false`.

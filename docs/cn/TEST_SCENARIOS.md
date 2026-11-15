@@ -1,9 +1,9 @@
 # 🧪 CodeNexus 测试场景矩阵
 
-> 适用版本：CodeNexus **v0.4.0-rc.2**（Cargo workspace，`Cargo.toml` MSRV 1.97.1 / edition 2021）
+> 适用版本：CodeNexus **v0.4.0**（Cargo workspace，`Cargo.toml` MSRV 1.97.1 / edition 2021）
 > 用途：穷举仓库现有测试套件覆盖的全部验收场景，作为回归对照与补充测试规划的基线。
-> 编写依据（只读核对）：`tests/` 下 11 个集成测试文件、`src/` 内 172 个 `#[cfg(test)]` 模块、`tests/acceptance/run_acceptance.sh` 验收 harness、`benches/` 7 组 Criterion 基准、`.github/workflows/ci.yml`。
-> 所有引用的测试名均经 `grep` 核实存在于当前代码；统计口径为 `#[test]` / `#[tokio::test]` 函数计数（固定字符串 grep）。
+> 编写依据（只读核对）：`tests/` 下 11 个集成测试文件、`src/` 内 183 个 `#[cfg(test)]` 模块、`tests/acceptance/run_acceptance.sh` 验收 harness、`benches/` 7 组 Criterion 基准、`.github/workflows/ci.yml`。
+> 所有引用的测试名均经 `grep` 核实存在于当前代码；集成层统计口径为 `#[test]` / `#[tokio::test]` 函数计数（固定字符串 grep），单元层总数以 `cargo test --lib -- --list` 收集数为准。
 
 ## 📋 目录
 
@@ -42,9 +42,9 @@
 
 ## 🗂️ 测试分层总览
 
-| 层级 | 位置 | 数量（截至 v0.4.0-rc.2） | 说明 |
+| 层级 | 位置 | 数量（截至 v0.4.0） | 说明 |
 |------|------|----------------------|------|
-| 单元测试 | `src/` 内联 `#[cfg(test)]`（172 个文件） | 4832 | 各模块核心逻辑；`cargo test --lib` 运行（4789 个 `#[test]` + 43 个 `#[tokio::test]`） |
+| 单元测试 | `src/` 内联 `#[cfg(test)]`（183 个文件） | 4887 | 各模块核心逻辑；`cargo test --lib` 收集运行（`#[test]`/`#[tokio::test]` 标注共 4974 处，收集数与标注数的差额来自泛型实例化与门控编译） |
 | 集成 E2E | `tests/e2e_feature_suite.rs` | 42 | 全功能端到端：索引→查询→追踪→分析工具包 |
 | 集成 E2E | `tests/end_to_end.rs` | 20 | 多语言仓库索引→查询→FFI/数据流边验证 |
 | CLI 子进程 | `tests/cli_index_and_daemon.rs` | 41 | 编译后的二进制子进程走完整 CLI 路径，覆盖 27 个子命令 |
@@ -325,4 +325,4 @@ bash tests/acceptance/run_acceptance.sh --dry-run
 | 覆盖率门禁 | 行覆盖 ≥ 95%（CI coverage job + pre-push 钩子） |
 | 本矩阵穷举的集成层场景 | 100 条（IDX 13 + QRY 6 + SRCH 8 + TRC/IMP 4 + CTX 3 + ANA 14 + DIA 2 + MCP 3 + ART 2 + CLI 9 + KIT 4 + I18N 9 + ERR 3 + MLT 11 = 91 条编号场景，另有若干合并行） |
 
-> 待补充：`src/` 内 4832 条单元测试的逐条场景化（当前以模块锚点概括）；`fuzz/` 目录注册了 4 个 fuzz target（`escape_cypher_string`、`escape_identifier`、`cypher_subset_parse`、`cnxp_header`），0.3.13-rc.1 曾对四个目标各跑 300–500 次冒烟，纳入回归时可按目标设置运行次数上限。
+> 待补充：`src/` 内 4887 条单元测试的逐条场景化（当前以模块锚点概括）；`fuzz/` 目录注册了 4 个 fuzz target（`escape_cypher_string`、`escape_identifier`、`cypher_subset_parse`、`cnxp_header`），0.3.13-rc.1 曾对四个目标各跑 300–500 次冒烟，纳入回归时可按目标设置运行次数上限。

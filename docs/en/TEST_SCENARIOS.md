@@ -1,9 +1,9 @@
 # 🧪 CodeNexus Test Scenario Matrix
 
-> Applies to CodeNexus **v0.4.0-rc.2** (Cargo workspace, `Cargo.toml` MSRV 1.97.1 / edition 2021)
+> Applies to CodeNexus **v0.4.0** (Cargo workspace, `Cargo.toml` MSRV 1.97.1 / edition 2021)
 > Purpose: exhaustively enumerate every acceptance scenario covered by the repo's existing test suites, as a baseline for regression comparison and additional test planning.
-> Written from (read-only verification): 11 integration test files under `tests/`, 172 `#[cfg(test)]` modules in `src/`, the `tests/acceptance/run_acceptance.sh` acceptance harness, 7 Criterion benchmark groups in `benches/`, and `.github/workflows/ci.yml`.
-> Every referenced test name was verified with `grep` to exist in the current code; statistics count `#[test]` / `#[tokio::test]` functions (fixed-string grep).
+> Written from (read-only verification): 11 integration test files under `tests/`, 183 `#[cfg(test)]` modules in `src/`, the `tests/acceptance/run_acceptance.sh` acceptance harness, 7 Criterion benchmark groups in `benches/`, and `.github/workflows/ci.yml`.
+> Every referenced test name was verified with `grep` to exist in the current code; integration-layer statistics count `#[test]` / `#[tokio::test]` functions (fixed-string grep), and the unit-layer total is the count collected by `cargo test --lib -- --list`.
 
 ## 📋 Table of Contents
 
@@ -42,9 +42,9 @@
 
 ## 🗂️ Test layer overview
 
-| Layer | Location | Count (as of v0.4.0-rc.2) | Notes |
+| Layer | Location | Count (as of v0.4.0) | Notes |
 |-------|----------|---------------------------|-------|
-| Unit tests | inline `#[cfg(test)]` in `src/` (172 files) | 4832 | Core logic of each module; run by `cargo test --lib` (4789 `#[test]` + 43 `#[tokio::test]`) |
+| Unit tests | inline `#[cfg(test)]` in `src/` (183 files) | 4887 | Core logic of each module; collected and run by `cargo test --lib` (4974 `#[test]`/`#[tokio::test]` annotations in total; the gap between collected and annotated counts comes from generic instantiation and gated compilation) |
 | Integration E2E | `tests/e2e_feature_suite.rs` | 42 | Full-feature end to end: index → query → trace → analysis toolkit |
 | Integration E2E | `tests/end_to_end.rs` | 20 | Multi-language repo index → query → FFI/data-flow edge verification |
 | CLI subprocess | `tests/cli_index_and_daemon.rs` | 41 | Compiled binary subprocess walks the full CLI path, covering 27 subcommands |
@@ -325,4 +325,4 @@ bash tests/acceptance/run_acceptance.sh --dry-run
 | Coverage gate | Line coverage ≥ 95% (CI coverage job + pre-push hook) |
 | Integration-layer scenarios enumerated by this matrix | 100 rows (IDX 13 + QRY 6 + SRCH 8 + TRC/IMP 4 + CTX 3 + ANA 14 + DIA 2 + MCP 3 + ART 2 + CLI 9 + KIT 4 + I18N 9 + ERR 3 + MLT 11 = 91 numbered scenarios, plus several merged rows) |
 
-> To be added: per-scenario enumeration of the 4832 unit tests in `src/` (currently summarized by module anchors); the `fuzz/` directory registers 4 fuzz targets (`escape_cypher_string`, `escape_identifier`, `cypher_subset_parse`, `cnxp_header`); 0.3.13-rc.1 ran 300–500 smoke iterations per target, and when folding them into regression, set a per-target run-count cap.
+> To be added: per-scenario enumeration of the 4887 unit tests in `src/` (currently summarized by module anchors); the `fuzz/` directory registers 4 fuzz targets (`escape_cypher_string`, `escape_identifier`, `cypher_subset_parse`, `cnxp_header`); 0.3.13-rc.1 ran 300–500 smoke iterations per target, and when folding them into regression, set a per-target run-count cap.

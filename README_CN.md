@@ -199,7 +199,7 @@ CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model 
 | [📜 行为准则](docs/cn/CODE_OF_CONDUCT.md) | 社区行为准则 |
 | [🔬 研究笔记](docs/research/) | TaintRadar、级联漏洞链等论文笔记 |
 | [🛡️ 安全审计](docs/security/) | Strix 审计 triage 与 ReDoS 误报复核实证 |
-| [🤖 CLI 技能](skill/SKILL.md) | 面向 AI 智能体的 CLI 用法知识包（针对 v0.4.0-rc.2 校验） |
+| [🤖 CLI 技能](skill/SKILL.md) | 面向 AI 智能体的 CLI 用法知识包（针对 v0.4.0 校验） |
 | [📈 基准测试说明](benches/README.md) | Criterion 基准套件与 SLO 阈值表 |
 | [📦 crates.io](https://crates.io/crates/codenexus) | 发布页面 |
 
@@ -217,7 +217,7 @@ CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model 
 
 CodeNexus 采用「库 + 二进制」双目标 crate：`src/lib.rs` 暴露公共 API（模型 / 解析 / 存储 / 索引 / 查询 / 追踪 / service 模块），`src/main.rs` 是 sdforge 驱动的 CLI 二进制；v0.3.2 起 CLI 与 MCP 接口经 sdforge `#[forge]` 宏统一封装在 `src/service/`，每个命令定义 core 函数 + CLI wrapper + MCP wrapper。索引方向为「文件发现 → 增量哈希 → 并行解析 → 符号解析 → 批量入库」。
 
-三层源码结构、索引管线流程图、图模型（45 种节点 / 32 种边与置信度分层）、核心语言提取表与 `architecture` / `diagram` / `arch_diff` 命令输出语义，详见 [📖 用户指南](docs/cn/USER_GUIDE.md)。
+图模型（45 种节点 / 32 种边）的类型清单见 [📘 API 参考](docs/cn/API_REFERENCE.md) 的 `model` 模块；`architecture` / `diagram` / `arch_diff` 命令的输出语义详见 [📖 用户指南](docs/cn/USER_GUIDE.md)。
 
 ---
 

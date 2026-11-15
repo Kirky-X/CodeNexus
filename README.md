@@ -200,7 +200,7 @@ CodeNexus uses [sdforge](https://crates.io/crates/sdforge) to provide an MCP (Mo
 | [📜 Code of Conduct](docs/en/CODE_OF_CONDUCT.md) | Community code of conduct |
 | [🔬 Research Notes](docs/research/) | Paper notes: TaintRadar, cascaded vulnerability chains |
 | [🛡️ Security Audits](docs/security/) | Strix audit triage with a ReDoS false-positive proof |
-| [🤖 CLI Skill](skill/SKILL.md) | Agent-facing CLI usage knowledge pack (verified against v0.4.0-rc.2) |
+| [🤖 CLI Skill](skill/SKILL.md) | Agent-facing CLI usage knowledge pack (verified against v0.4.0) |
 | [📈 Benchmark Notes](benches/README.md) | Criterion benchmark suite and SLO threshold table |
 | [📦 crates.io](https://crates.io/crates/codenexus) | Publication page |
 
@@ -218,7 +218,7 @@ All 14 runnable examples live in [`examples/`](examples/) (the full table and ru
 
 CodeNexus is a dual-target "library + binary" crate: `src/lib.rs` exposes the public API (model / parse / storage / index / query / trace / service modules) and `src/main.rs` is the sdforge-driven CLI binary; since v0.3.2 the CLI and MCP interfaces are unified through the sdforge `#[forge]` macro inside `src/service/`, where each command defines a core function + CLI wrapper + MCP wrapper. Indexing flows through "file discovery → incremental hashing → parallel parsing → symbol resolution → bulk load".
 
-The three-layer source structure, pipeline diagram, graph model (45 node / 32 edge types with confidence tiers), per-language extraction table, and the output semantics of `architecture` / `diagram` / `arch_diff` live in the [📖 User Guide](docs/en/USER_GUIDE.md).
+The graph model's type inventory (45 node / 32 edge types) is listed under the `model` module in the [📘 API Reference](docs/en/API_REFERENCE.md); the output semantics of `architecture` / `diagram` / `arch_diff` live in the [📖 User Guide](docs/en/USER_GUIDE.md).
 
 ---
 

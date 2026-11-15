@@ -182,7 +182,7 @@ Defined in `src/storage/capability.rs`; the unified port of the storage layer (o
 
 ## 🖥️ CLI / MCP external interface
 
-CLI and MCP share the same command set defined by the `#[forge]` macro in `src/service/` (core function + CLI wrapper + MCP wrapper). The 38 CLI subcommands (plus the `mcp` serve mode), the 11 MCP tools (query / trace / impact / search / source / context / architecture / diagram / arch_diff / dead_code / detect_changes), and the semantics of every flag are covered in the [📖 User Guide](USER_GUIDE.md).
+CLI and MCP share the same command set defined by the `#[forge]` macro in `src/service/` (core function + CLI wrapper + MCP wrapper). The 39 CLI subcommands (plus the `mcp` serve mode), the 11 MCP tools (query / trace / impact / search / source / context / architecture / diagram / arch_diff / dead_code / detect_changes), and the semantics of every flag are covered in the [📖 User Guide](USER_GUIDE.md).
 
 ### service::source (symbol source-reading library API)
 
@@ -193,17 +193,17 @@ use codenexus::service::source::{
     run_read_symbol_source, LineWindow, SourceOptions, SymbolKey,
 };
 
-// 按 qualifiedName 读完整函数源码（推荐从 search/context 输出复制标识）
+// Read the full function source by qualifiedName (recommended: copy the identifier from search/context output)
 let out = run_read_symbol_source(&kit, SymbolKey::QualifiedName("myproj.src.main.rs.build_cli_command".into()), &SourceOptions::default())?;
-println!("{}", out.source); // 完整函数体；out.start_line/end_line 为实际切片行号
+println!("{}", out.source); // full function body; out.start_line/end_line are the actual slice line numbers
 
-// 超大符号分页：绝对行号窗口（span ∩ window）
+// Pagination for oversized symbols: an absolute line-number window (span ∩ window)
 let opts = SourceOptions {
     window: Some(LineWindow { start: 500, end: None }),
     ..SourceOptions::default()
 };
 
-// 其余定位键：SymbolKey::NodeId(id)、SymbolKey::FilePathAndName { file_path, name }
+// Other locator keys: SymbolKey::NodeId(id), SymbolKey::FilePathAndName { file_path, name }
 ```
 
 - Returns `SymbolSource` (serde camelCase: `nodeId` / `label` / `qualifiedName` / `filePath` / `startLine` / `endLine` / `totalLines` / `source`)
@@ -265,7 +265,7 @@ use codenexus::query::QueryFacade;
 fn main() {
     let db_path = std::path::Path::new(".codenexus/demo.lbug");
 
-    // 1. 索引：写内嵌示例源码到临时目录后索引
+    // 1. Index: write the embedded sample source to a temp directory, then index it
     let facade = IndexFacade::new(db_path).expect("IndexFacade::new");
     let result = facade
         .index(std::path::Path::new("src"), "demo-project", true)
@@ -276,7 +276,7 @@ fn main() {
     println!("Edges created: {}", result.edges_created);
     println!("Project ID:    {}", result.project_id);
 
-    // 2. 查询：Cypher 列出函数
+    // 2. Query: list functions via Cypher
     let query = QueryFacade::new(db_path).expect("QueryFacade::new");
     let qr = query
         .cypher("MATCH (f:Function) RETURN f.name, f.qualifiedName LIMIT 10")

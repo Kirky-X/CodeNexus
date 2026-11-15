@@ -521,7 +521,7 @@ Dumps the LadybugDB database to a zstd-compressed artifact with a JSON manifest 
 - `--project <NAME_OR_ID>` — Project name or id to include in the manifest (required)
 - `--db <DB_PATH>` — Database path to export (default: `.codenexus/<project>.lbug`; see Conventions)
 
-> ✅ **Fixed in 0.3.4 (Problem D):** the export manifest now reads the version from `env!("CARGO_PKG_VERSION")` (`src/service/export.rs`), so `"codenexus_version"` matches the binary. The earlier confusion came from `--version` being polluted by the `sdforge` dependency (which reports its own `0.4.2`); `src/main.rs` now reads `Cargo.toml` as the single source of truth, so both `--version` and the manifest report the current `Cargo.toml` version (currently `0.4.0-rc.2`; `0.3.4` was the value at the time this was verified).
+> ✅ **Fixed in 0.3.4 (Problem D):** the export manifest now reads the version from `env!("CARGO_PKG_VERSION")` (`src/service/export.rs`), so `"codenexus_version"` matches the binary. The earlier confusion came from `--version` being polluted by the `sdforge` dependency (which reports its own `0.4.2`); `src/main.rs` now reads `Cargo.toml` as the single source of truth, so both `--version` and the manifest report the current `Cargo.toml` version (currently `0.4.0`; `0.3.4` was the value at the time this was verified).
 
 #### import — Import a team artifact (H7)
 
@@ -669,7 +669,7 @@ codenexus hook [--db <DB_PATH>]
 
 #### mcp — Serve MCP tools over stdio (H13)
 
-Starts an sdforge-based MCP server over stdio, exposing 10 tools: `query` (execute Cypher), `trace` (trace symbol paths), `impact` (blast radius analysis), `search` (symbol search), `context` (360° symbol view), `architecture` (architecture overview), `diagram` (architecture diagram), `arch_diff` (architecture delta), `dead_code` (dead code detection), `detect_changes` (change impact). Launched by AI agents via the config written by `codenexus setup`. This replaces the previous hand-written JSON-RPC implementation.
+Starts an sdforge-based MCP server over stdio, exposing 11 tools: `query` (execute Cypher), `trace` (trace symbol paths), `impact` (blast radius analysis), `search` (symbol search), `source` (read a symbol's full source text), `context` (360° symbol view), `architecture` (architecture overview), `diagram` (architecture diagram), `arch_diff` (architecture delta), `dead_code` (dead code detection), `detect_changes` (change impact). Launched by AI agents via the config written by `codenexus setup`. This replaces the previous hand-written JSON-RPC implementation.
 
 ```bash
 codenexus mcp [--db <DB_PATH>]
