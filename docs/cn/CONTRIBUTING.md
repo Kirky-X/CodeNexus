@@ -154,8 +154,8 @@ cargo test --features embeddings
 
 ## 🎨 代码风格
 
-- **格式**：`cargo +nightly fmt` 是最终标准。配置位于 [`rustfmt.toml`](rustfmt.toml)：4 空格缩进、100 列宽、Unix 换行、`imports_granularity = Preserve`。
-- **编辑器配置**：见 [`.editorconfig`](.editorconfig)（Rust 4 空格、Markdown 2 空格、YAML 2 空格、UTF-8、LF、去除行尾空白）。
+- **格式**：`cargo +nightly fmt` 是最终标准。配置位于 [`rustfmt.toml`](../../rustfmt.toml)：4 空格缩进、100 列宽、Unix 换行、`imports_granularity = Preserve`。
+- **编辑器配置**：见 [`.editorconfig`](../../.editorconfig)（Rust 4 空格、Markdown 2 空格、YAML 2 空格、UTF-8、LF、去除行尾空白）。
 - **命名**：遵循标准 Rust 风格（函数/变量/模块用 `snake_case`，类型/trait/枚举用 `PascalCase`）。与代码库现有约定保持一致——有疑问时参考相邻代码。
 - **错误处理**：库错误枚举使用 `thiserror`，CLI/`main` 边界使用 `anyhow`。不要静默吞掉错误；将它们暴露出来（参见项目规则"Fail Loud"）。
 - **禁止 emoji**：源码、注释和提交信息中不使用 emoji。文档保持纯文本。
@@ -170,7 +170,7 @@ cargo test --features embeddings
 4. 在统一 Kit 注册表（`trait-kit`）中注册提取器。
 5. 如该语言需要新标签，在 `src/model/` 中添加节点/边类型。
 6. 在 `tests/` 中添加测试，索引小型样本并断言提取的图。
-7. 更新 `README.md` 的"支持语言"和"特性标志"表。
+7. 更新 `docs/cn/USER_GUIDE.md`「构建预设与 Feature 开关」节的语言与 feature 表。
 
 开始大规模工作前先开 Issue 讨论范围。
 

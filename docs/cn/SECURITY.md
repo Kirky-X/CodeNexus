@@ -36,7 +36,7 @@ CodeNexus's attack surface is concentrated in handling index files and query inp
 - Dry-run-by-default graph edits (`rename --apply false`).
 - Fail-loud diagnostic receipts: stable rule codes + evidence + actionable fixes instead of silent degradation.
 
-The historical audit record (Strix ReDoS false-positive triage with proof) lives in [docs/security/](security/).
+The historical audit record (Strix ReDoS false-positive triage with proof) lives in [docs/security/](../security/).
 
 ## ⛓️ Supply Chain and Gates
 
