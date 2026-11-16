@@ -12,6 +12,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # patch 级版本更新关闭自动 PR（2026-11-16）
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-patch"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -28,3 +33,8 @@ updates:
       codeql-action:
         patterns:
           - "github/codeql-action/*"
+    # patch 级版本更新关闭自动 PR（2026-11-16）
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-patch"
