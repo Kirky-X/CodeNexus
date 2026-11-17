@@ -1,5 +1,4 @@
-# Standalone cargo-fuzz crate — must NOT join the root workspace
-# (cargo-fuzz manages its own build/lockfile with sanitizer flags).
+# Standalone cargo-fuzz crate — must NOT join the root workspace (cargo-fuzz owns its build/lockfile)
 [workspace]
 
 [package]

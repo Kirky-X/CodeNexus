@@ -21,8 +21,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "codenexus"
 path = "src/main.rs"
-# 主 bin 使用 cli 门控的 sdforge/clap——声明 required-features 使
-# minimal 等无 cli 组合跳过 bin 编译（此前为 26 个 unresolved 错误）。
+# 主 bin 使用 cli 门控的 sdforge/clap——声明 required-features 使 minimal 等无 cli 组合跳过 bin 编译（此前为 26 个 unresolved 错误）。
 required-features = ["cli"]
 
 [[bin]]
@@ -31,12 +30,8 @@ path = "src/main.rs"
 # `cn` 是 `codenexus` 的等形态别名命令（同一源、同一 CLI 面）。
 required-features = ["cli"]
 
-# 原 `[[bin]] codenexus-verify`（path=tools/verification/src/main.rs，违规
-# 自定义路径形态）已折叠为主 CLI 的 `verify` 子命令：实现整体迁入库侧
-# `src/verify/`（orchestrator + 统计/客户端/查询比对/报告/类型映射），
-# 入口经 sdforge inventory 注册（src/verify/mod.rs）。数据文件
-# （samples.json / type_map.json / queries/ / fetch_samples.sh）保留在
-# tools/verification/ 不动。
+# 原 [[bin]] codenexus-verify 已折叠为主 CLI 的 verify 子命令，实现迁入 src/verify/，入口经 sdforge inventory 注册
+# 数据文件（samples.json / type_map.json / queries/ / fetch_samples.sh）仍留在 tools/verification/
 
 [features]
 default = ["full"]
@@ -80,8 +75,7 @@ cli = ["sdforge/cli", "sdforge/inklog", "dep:oxiarc-zstd"]
 cache = ["dep:oxcache"]
 i18n = ["dep:icu_normalizer", "dep:icu_casemap"]
 hub = ["dep:reqwest"]
-# 内嵌 graph-viewer Web UI（`codenexus webui`）；opt-in，默认构建不含
-# graph-viewer 内嵌服务（见 feature `webui`）
+# 内嵌 graph-viewer Web UI（codenexus webui）；opt-in，默认构建不含 graph-viewer 内嵌服务（见 feature webui）
 webui = ["dep:axum", "dep:mime_guess", "dep:rust-embed", "tokio/net", "tokio/sync"]
 
 [dependencies]
